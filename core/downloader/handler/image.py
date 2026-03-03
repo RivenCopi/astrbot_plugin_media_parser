@@ -5,11 +5,7 @@ from typing import Optional
 
 import aiohttp
 
-try:
-    from astrbot.api import logger
-except ImportError:
-    import logging
-    logger = logging.getLogger(__name__)
+from ...logger import logger
 
 from ..utils import generate_cache_file_path, get_image_suffix
 from .base import download_media_from_url

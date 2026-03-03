@@ -5,11 +5,7 @@ from typing import Dict, Any, List, Optional, Tuple
 
 import aiohttp
 
-try:
-    from astrbot.api import logger
-except ImportError:
-    import logging
-    logger = logging.getLogger(__name__)
+from ...logger import logger
 
 from ...constants import Config
 from ..utils import process_gather_results, generate_cache_file_path

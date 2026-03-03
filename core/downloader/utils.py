@@ -2,11 +2,7 @@ import os
 import re
 from typing import Optional, List, Dict, Any
 
-try:
-    from astrbot.api import logger
-except ImportError:
-    import logging
-    logger = logging.getLogger(__name__)
+from ..logger import logger
 
 
 def validate_content_type(
@@ -76,13 +72,19 @@ def extract_size_from_headers(
     if content_range:
         match = re.search(r'/\s*(\d+)', content_range)
         if match:
-            size_bytes = int(match.group(1))
-            return size_bytes / (1024 * 1024)
+            try:
+                size_bytes = int(match.group(1))
+                return size_bytes / (1024 * 1024)
+            except (ValueError, TypeError):
+                pass
     
     content_length = response.headers.get("Content-Length")
     if content_length:
-        size_bytes = int(content_length)
-        return size_bytes / (1024 * 1024)
+        try:
+            size_bytes = int(content_length)
+            return size_bytes / (1024 * 1024)
+        except (ValueError, TypeError):
+            pass
     
     return None
 
@@ -114,6 +116,14 @@ def check_cache_dir_available(cache_dir: str) -> bool:
         return False
 
 
+_IMAGE_CONTENT_TYPE_MAP = {
+    'jpeg': '.jpg', 'jpg': '.jpg', 'png': '.png',
+    'webp': '.webp', 'gif': '.gif',
+}
+
+_IMAGE_EXT_LIST = ['.jpg', '.jpeg', '.png', '.webp', '.gif']
+
+
 def get_image_suffix(content_type: str = None, url: str = None) -> str:
     """根据Content-Type或URL确定图片文件扩展名
 
@@ -125,27 +135,28 @@ def get_image_suffix(content_type: str = None, url: str = None) -> str:
         文件扩展名（.jpg, .png, .webp, .gif），默认返回.jpg
     """
     if content_type:
-        if 'jpeg' in content_type or 'jpg' in content_type:
-            return '.jpg'
-        elif 'png' in content_type:
-            return '.png'
-        elif 'webp' in content_type:
-            return '.webp'
-        elif 'gif' in content_type:
-            return '.gif'
+        ct_lower = content_type.lower()
+        for key, ext in _IMAGE_CONTENT_TYPE_MAP.items():
+            if key in ct_lower:
+                return ext
 
     if url:
         url_lower = url.lower()
-        if '.jpg' in url_lower or '.jpeg' in url_lower:
-            return '.jpg'
-        elif '.png' in url_lower:
-            return '.png'
-        elif '.webp' in url_lower:
-            return '.webp'
-        elif '.gif' in url_lower:
-            return '.gif'
+        for ext in _IMAGE_EXT_LIST:
+            if ext in url_lower:
+                return '.jpg' if ext == '.jpeg' else ext
 
     return '.jpg'
+
+
+_VIDEO_CONTENT_TYPE_MAP = [
+    ('f4v', '.f4v'), ('mp4', '.mp4'), ('matroska', '.mkv'), ('mkv', '.mkv'),
+    ('quicktime', '.mov'), ('mov', '.mov'), ('x-msvideo', '.avi'), ('avi', '.avi'),
+    ('x-flv', '.flv'), ('flv', '.flv'), ('webm', '.webm'),
+    ('x-ms-wmv', '.wmv'), ('wmv', '.wmv'),
+]
+
+_VIDEO_EXT_LIST = ['.mp4', '.mkv', '.mov', '.avi', '.f4v', '.flv', '.webm', '.wmv']
 
 
 def get_video_suffix(content_type: str = None, url: str = None) -> str:
@@ -159,59 +170,16 @@ def get_video_suffix(content_type: str = None, url: str = None) -> str:
         文件扩展名（.mp4, .mkv, .mov, .avi, .flv, .f4v, .webm, .wmv），默认返回.mp4
     """
     if content_type:
-        content_type_lower = content_type.lower()
-        if 'mp4' in content_type_lower:
-            return '.mp4'
-        elif 'matroska' in content_type_lower or 'mkv' in content_type_lower:
-            return '.mkv'
-        elif 'quicktime' in content_type_lower or 'mov' in content_type_lower:
-            return '.mov'
-        elif 'avi' in content_type_lower or 'x-msvideo' in content_type_lower:
-            return '.avi'
-        elif 'x-flv' in content_type_lower or 'flv' in content_type_lower or 'f4v' in content_type_lower:
-            if 'f4v' in content_type_lower:
-                return '.f4v'
-            return '.flv'
-        elif 'webm' in content_type_lower:
-            return '.webm'
-        elif 'wmv' in content_type_lower or 'x-ms-wmv' in content_type_lower:
-            return '.wmv'
-        elif content_type_lower.startswith('video/'):
-            if '/mp4' in content_type_lower:
-                return '.mp4'
-            elif '/webm' in content_type_lower:
-                return '.webm'
-            elif '/quicktime' in content_type_lower or '/mov' in content_type_lower:
-                return '.mov'
-            elif '/flv' in content_type_lower or '/f4v' in content_type_lower:
-                if '/f4v' in content_type_lower:
-                    return '.f4v'
-                return '.flv'
-            elif '/avi' in content_type_lower:
-                return '.avi'
-            elif '/wmv' in content_type_lower:
-                return '.wmv'
-            elif '/matroska' in content_type_lower or '/mkv' in content_type_lower:
-                return '.mkv'
+        ct_lower = content_type.lower()
+        for key, ext in _VIDEO_CONTENT_TYPE_MAP:
+            if key in ct_lower:
+                return ext
 
     if url:
         url_lower = url.lower()
-        if '.mp4' in url_lower:
-            return '.mp4'
-        elif '.mkv' in url_lower:
-            return '.mkv'
-        elif '.mov' in url_lower:
-            return '.mov'
-        elif '.avi' in url_lower:
-            return '.avi'
-        elif '.f4v' in url_lower:
-            return '.f4v'
-        elif '.flv' in url_lower:
-            return '.flv'
-        elif '.webm' in url_lower:
-            return '.webm'
-        elif '.wmv' in url_lower:
-            return '.wmv'
+        for ext in _VIDEO_EXT_LIST:
+            if ext in url_lower:
+                return ext
 
     return '.mp4'
 

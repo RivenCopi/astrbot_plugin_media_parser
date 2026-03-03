@@ -6,11 +6,7 @@ from urllib.parse import urlparse, parse_qs
 
 import aiohttp
 
-try:
-    from astrbot.api import logger
-except ImportError:
-    import logging
-    logger = logging.getLogger(__name__)
+from ...logger import logger
 
 from .base import BaseVideoParser
 from ..utils import build_request_headers

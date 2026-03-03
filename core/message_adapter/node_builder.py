@@ -1,11 +1,7 @@
 import os
 from typing import Dict, Any, List, Optional, Tuple, Union
 
-try:
-    from astrbot.api import logger
-except ImportError:
-    import logging
-    logger = logging.getLogger(__name__)
+from ..logger import logger
 
 from astrbot.api.message_components import Plain, Image, Video, Node, Nodes
 
@@ -291,7 +287,6 @@ def build_all_nodes(
     link_metadata = []
     temp_files = []
     video_files = []
-    separator = "-------------------------------------"
     
     logger.debug(f"开始构建所有节点，元数据数量: {len(metadata_list)}, 打包模式: {is_auto_pack}")
     
@@ -328,9 +323,9 @@ def build_all_nodes(
             video_urls = metadata.get('video_urls', [])
             video_count = len(video_urls)
             
-            for idx, file_path in enumerate(link_file_paths):
+            for fp_idx, file_path in enumerate(link_file_paths):
                 if file_path:
-                    if idx < video_count:
+                    if fp_idx < video_count:
                         link_video_files.append(file_path)
                         video_files.append(file_path)
                     else:

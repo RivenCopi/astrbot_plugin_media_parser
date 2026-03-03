@@ -3,11 +3,7 @@ from typing import Optional, Callable, Dict, Any, Tuple
 
 import aiohttp
 
-try:
-    from astrbot.api import logger
-except ImportError:
-    import logging
-    logger = logging.getLogger(__name__)
+from ...logger import logger
 
 from ...file_cleaner import cleanup_file
 from ..utils import extract_size_from_headers

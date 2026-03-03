@@ -7,11 +7,7 @@ from urllib.parse import urlparse, parse_qs
 
 import aiohttp
 
-try:
-    from astrbot.api import logger
-except ImportError:
-    import logging
-    logger = logging.getLogger(__name__)
+from ...logger import logger
 
 from .base import BaseVideoParser
 from ..utils import build_request_headers, is_live_url, SkipParse
@@ -72,33 +68,6 @@ class BilibiliParser(BaseVideoParser):
             "Origin": "https://www.bilibili.com"
         }
     
-    def _add_range_prefix_to_video_urls(self, video_urls: List[List[str]]) -> List[List[str]]:
-        """为视频URL列表添加 range: 前缀
-        
-        Args:
-            video_urls: 视频URL列表（二维列表）
-            
-        Returns:
-            添加了 range: 前缀的视频URL列表
-        """
-        if not video_urls:
-            return video_urls
-        
-        result = []
-        for url_list in video_urls:
-            if url_list and isinstance(url_list, list):
-                prefixed_list = []
-                for url in url_list:
-                    if url and not url.startswith('range:'):
-                        prefixed_list.append(f'range:{url}')
-                    else:
-                        prefixed_list.append(url)
-                result.append(prefixed_list)
-            else:
-                result.append(url_list)
-        
-        return result
-
     def _prepare_aid_param(self, aid: str) -> int:
         """将aid转换为整数
 

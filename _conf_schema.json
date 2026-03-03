@@ -32,6 +32,7 @@
         "items": {
             "whitelist": {
                 "description": "白名单设置",
+                "hint": "如启用白名单但不配置具体名单会导致所有消息均无权限解析",
                 "type": "object",
                 "items": {
                     "enable": {

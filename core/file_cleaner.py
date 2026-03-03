@@ -2,11 +2,7 @@ import os
 import shutil
 from typing import List, Optional
 
-try:
-    from astrbot.api import logger
-except ImportError:
-    import logging
-    logger = logging.getLogger(__name__)
+from .logger import logger
 
 
 def cleanup_file(file_path: str) -> bool:

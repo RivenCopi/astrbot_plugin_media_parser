@@ -3,11 +3,7 @@ from typing import List, Dict, Any, Optional, Tuple
 
 import aiohttp
 
-try:
-    from astrbot.api import logger
-except ImportError:
-    import logging
-    logger = logging.getLogger(__name__)
+from ..logger import logger
 
 from .platform.base import BaseVideoParser
 from .router import LinkRouter
@@ -85,9 +81,9 @@ class ParserManager:
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         metadata_list = []
+        link_items = list(unique_links.items())
         for i, result in enumerate(results):
-            url = list(unique_links.keys())[i]
-            parser = unique_links[url]
+            url, parser = link_items[i]
             if isinstance(result, Exception):
                 if isinstance(result, SkipParse):
                     self.logger.debug(f"跳过解析: {url}, 原因: {result}")

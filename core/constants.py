@@ -19,5 +19,5 @@ class Config:
     DOWNLOAD_MANAGER_MAX_CONCURRENT = 3
     PARSER_MAX_CONCURRENT = 10
     
-    DEBUG_MODE = False
+    DEFAULT_CACHE_DIR = "/app/sharedFolder/video_parser/cache"
 

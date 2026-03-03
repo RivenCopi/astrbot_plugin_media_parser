@@ -1,10 +1,6 @@
 from typing import List
 
-try:
-    from astrbot.api import logger
-except ImportError:
-    import logging
-    logger = logging.getLogger(__name__)
+from .logger import logger
 
 from .constants import Config
 from .downloader.utils import check_cache_dir_available

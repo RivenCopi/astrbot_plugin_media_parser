@@ -4,11 +4,7 @@ from typing import Any, Dict
 
 import aiohttp
 
-try:
-    from astrbot.api import logger
-except ImportError:
-    import logging
-    logger = logging.getLogger(__name__)
+from .core.logger import logger
 
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
@@ -18,7 +14,8 @@ from .core.parser import ParserManager
 from .core.downloader import DownloadManager
 from .core.file_cleaner import cleanup_files, cleanup_directory
 from .core.constants import Config
-from .core.message_adapter import MessageManager
+from .core.message_adapter.sender import MessageSender
+from .core.message_adapter.node_builder import build_all_nodes
 from .core.config_manager import ConfigManager
 
 
@@ -31,57 +28,24 @@ from .core.config_manager import ConfigManager
 class VideoParserPlugin(Star):
 
     def __init__(self, context: Context, config: dict):
-        """初始化插件
-
-        Args:
-            context: 上下文对象
-            config: 配置字典
-
-        Raises:
-            ValueError: 没有启用任何解析器时
-        """
+        """初始化插件"""
         super().__init__(context)
         self.logger = logger
         
         self.config_manager = ConfigManager(config)
         
-        self.is_auto_pack = self.config_manager.is_auto_pack
-        self.is_auto_parse = self.config_manager.is_auto_parse
-        self.trigger_keywords = self.config_manager.trigger_keywords
-        self.max_video_size_mb = self.config_manager.max_video_size_mb
-        self.large_video_threshold_mb = self.config_manager.large_video_threshold_mb
-        self.debug_mode = self.config_manager.debug_mode
-        self.whitelist = {
-            "enable": self.config_manager.whitelist_enable,
-            "user": self.config_manager.whitelist_user,
-            "group": self.config_manager.whitelist_group
-        }
-        
-        self.blacklist = {
-            "enable": self.config_manager.blacklist_enable,
-            "user": self.config_manager.blacklist_user,
-            "group": self.config_manager.blacklist_group
-        }
-        
-        self.enable_opening_msg = self.config_manager.enable_opening_msg
-        self.opening_msg_content = self.config_manager.opening_msg_content
-        self.enable_text_metadata = self.config_manager.enable_text_metadata
-
-        
         parsers = self.config_manager.create_parsers()
         self.parser_manager = ParserManager(parsers)
         
         self.download_manager = DownloadManager(
-            max_video_size_mb=self.max_video_size_mb,
-            large_video_threshold_mb=self.large_video_threshold_mb,
+            max_video_size_mb=self.config_manager.max_video_size_mb,
+            large_video_threshold_mb=self.config_manager.large_video_threshold_mb,
             cache_dir=self.config_manager.cache_dir,
             pre_download_all_media=self.config_manager.pre_download_all_media,
             max_concurrent_downloads=self.config_manager.max_concurrent_downloads
         )
         
-        self.proxy_addr = self.config_manager.proxy_addr
-        
-        self.message_manager = MessageManager(logger=self.logger)
+        self.message_sender = MessageSender(logger=self.logger)
 
     async def terminate(self):
         """插件终止时的清理工作"""
@@ -90,18 +54,70 @@ class VideoParserPlugin(Star):
         if self.download_manager.cache_dir:
             cleanup_directory(self.download_manager.cache_dir)
 
+    def _check_permission(self, is_private: bool, sender_id: Any, group_id: Any) -> bool:
+        """检查用户或群组是否有权限使用解析"""
+        w_enable = self.config_manager.whitelist_enable
+        w_user = self.config_manager.whitelist_user
+        w_group = self.config_manager.whitelist_group
+        b_enable = self.config_manager.blacklist_enable
+        b_user = self.config_manager.blacklist_user
+        b_group = self.config_manager.blacklist_group
+
+        allowed = None
+        if w_enable and sender_id in w_user:
+            allowed = True
+        elif b_enable and sender_id in b_user:
+            allowed = False
+        elif w_enable and not is_private and group_id in w_group:
+            allowed = True
+        elif b_enable and not is_private and group_id in b_group:
+            allowed = False
+            
+        if allowed is None:
+            allowed = not w_enable
+
+        return allowed
+        
+    def _extract_url_from_json_card(self, event: AstrMessageEvent) -> str | None:
+        """尝试从QQ结构化卡片消息中提取URL"""
+        try:
+            messages = event.get_messages()
+            if not messages:
+                return None
+            first_msg = messages[0]
+            msg_data = first_msg.data
+            curl_link = None
+    
+            if isinstance(msg_data, dict) and not msg_data.get('data'):
+                meta = msg_data.get("meta") or {}
+                detail_1 = meta.get("detail_1") or {}
+                curl_link = detail_1.get("qqdocurl")
+                if not curl_link:
+                    news = meta.get("news") or {}
+                    curl_link = news.get("jumpUrl")
+    
+            if not curl_link:
+                json_str = msg_data.get('data', '') if isinstance(msg_data, dict) else msg_data
+                if json_str and isinstance(json_str, str):
+                    message_data = json.loads(json_str)
+                    meta = message_data.get("meta") or {}
+                    detail_1 = meta.get("detail_1") or {}
+                    curl_link = detail_1.get("qqdocurl")
+                    if not curl_link:
+                        news = meta.get("news") or {}
+                        curl_link = news.get("jumpUrl")
+                        
+            return curl_link
+        except (AttributeError, KeyError, json.JSONDecodeError, IndexError, TypeError) as e:
+            if self.config_manager.debug_mode:
+                self.logger.debug(f"提取JSON卡片链接失败: {e}")
+            return None
+
     def _should_parse(self, message_str: str) -> bool:
-        """判断是否应该解析消息
-
-        Args:
-            message_str: 消息文本
-
-        Returns:
-            是否应该解析
-        """
-        if self.is_auto_parse:
+        """判断是否应该解析消息"""
+        if self.config_manager.is_auto_parse:
             return True
-        for keyword in self.trigger_keywords:
+        for keyword in self.config_manager.trigger_keywords:
             if keyword in message_str:
                 return True
         return False
@@ -109,82 +125,33 @@ class VideoParserPlugin(Star):
 
     @filter.event_message_type(EventMessageType.ALL)
     async def auto_parse(self, event: AstrMessageEvent):
-        """自动解析消息中的视频链接
-
-        Args:
-            event: 消息事件对象
-        """
+        """自动解析消息中的视频链接"""
         is_private = event.is_private_chat()
         sender_id = event.get_sender_id()
         group_id = None if is_private else event.get_group_id()
 
-        allowed = None
-        if self.whitelist["enable"] and sender_id in self.whitelist["user"]:
-            allowed = True
-        elif self.blacklist["enable"] and sender_id in self.blacklist["user"]:
-            allowed = False
-        elif self.whitelist["enable"] and not is_private and group_id in self.whitelist["group"]:
-            allowed = True
-        elif self.blacklist["enable"] and not is_private and group_id in self.blacklist["group"]:
-            allowed = False
-            
-        if allowed is None:
-            if self.whitelist["enable"]:
-                allowed = False
-            else:
-                allowed = True
-
-        if not allowed:
+        if not self._check_permission(is_private, sender_id, group_id):
             return
 
         message_text = event.message_str
-        try:
-            messages = event.get_messages()
-            if messages and len(messages) > 0:
-                first_msg = messages[0]
-                msg_data = first_msg.data
-                curl_link = None
+        card_url = self._extract_url_from_json_card(event)
         
-                if isinstance(msg_data, dict) and not msg_data.get('data'):
-                    meta = msg_data.get("meta") or {}
-                    detail_1 = meta.get("detail_1") or {}
-                    curl_link = detail_1.get("qqdocurl")
-                    if not curl_link:
-                        news = meta.get("news") or {}
-                        curl_link = news.get("jumpUrl")
-        
-                if not curl_link:
-                    json_str = msg_data.get('data', '') if isinstance(msg_data, dict) else msg_data
-                    if json_str and isinstance(json_str, str):
-                        message_data = json.loads(json_str)
-                        meta = message_data.get("meta") or {}
-                        detail_1 = meta.get("detail_1") or {}
-                        curl_link = detail_1.get("qqdocurl")
-                        if not curl_link:
-                            news = meta.get("news") or {}
-                            curl_link = news.get("jumpUrl")
-        
-                if curl_link:
-                    if self.debug_mode:
-                        self.logger.debug(f"[media_parser] 从JSON卡片提取到链接: {curl_link}")
-                    message_text = curl_link
-        except (AttributeError, KeyError, json.JSONDecodeError, IndexError, TypeError) as e:
-            if self.debug_mode:
-                self.logger.debug(f"[media_parser] 提取JSON卡片链接失败: {e}")
+        if card_url:
+            if self.config_manager.debug_mode:
+                self.logger.debug(f"[media_parser] 从JSON卡片提取到链接: {card_url}")
+            message_text = card_url
         
         if not self._should_parse(message_text):
             return
         
-        links_with_parser = self.parser_manager.extract_all_links(
-            message_text
-        )
+        links_with_parser = self.parser_manager.extract_all_links(message_text)
         if not links_with_parser:
             return
         
-        if self.debug_mode:
+        if self.config_manager.debug_mode:
             self.logger.debug(f"提取到 {len(links_with_parser)} 个可解析链接: {[link for link, _ in links_with_parser]}")
         
-        sender_name, sender_id = self.message_manager.get_sender_info(event)
+        sender_name, sender_id = self.message_sender.get_sender_info(event)
         
         timeout = aiohttp.ClientTimeout(total=Config.DEFAULT_TIMEOUT)
         async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -193,7 +160,7 @@ class VideoParserPlugin(Star):
                 session
             )
             if not metadata_list:
-                if self.debug_mode:
+                if self.config_manager.debug_mode:
                     self.logger.debug("解析后未获得任何元数据")
                 return
             
@@ -204,15 +171,15 @@ class VideoParserPlugin(Star):
             )
             
             if not has_valid_metadata:
-                if self.debug_mode:
+                if self.config_manager.debug_mode:
                     self.logger.debug("解析后未获得任何有效元数据（可能是直播链接或解析失败）")
                 return
             
-            if self.enable_opening_msg:
-                msg_text = self.opening_msg_content if self.opening_msg_content else "流媒体解析bot为您服务 ٩( 'ω' )و"
+            if self.config_manager.enable_opening_msg:
+                msg_text = self.config_manager.opening_msg_content if self.config_manager.opening_msg_content else "流媒体解析bot为您服务 ٩( 'ω' )و"
                 await event.send(event.plain_result(msg_text))
             
-            if self.debug_mode:
+            if self.config_manager.debug_mode:
                 self.logger.debug(f"解析获得 {len(metadata_list)} 条元数据")
                 for idx, metadata in enumerate(metadata_list):
                     self.logger.debug(
@@ -223,14 +190,6 @@ class VideoParserPlugin(Star):
                     )
             
             async def process_single_metadata(metadata: Dict[str, Any]) -> Dict[str, Any]:
-                """处理单个元数据
-
-                Args:
-                    metadata: 元数据字典
-
-                Returns:
-                    处理后的元数据字典，异常时包含error字段
-                """
                 if metadata.get('error'):
                     return metadata
                 
@@ -238,7 +197,7 @@ class VideoParserPlugin(Star):
                     processed_metadata = await self.download_manager.process_metadata(
                         session,
                         metadata,
-                        proxy_addr=self.proxy_addr
+                        proxy_addr=self.config_manager.proxy_addr
                     )
                     return processed_metadata
                 except Exception as e:
@@ -275,37 +234,44 @@ class VideoParserPlugin(Star):
             temp_files = []
             video_files = []
             try:
-                all_link_nodes, link_metadata, temp_files, video_files = self.message_manager.build_nodes(
+                all_link_nodes, link_metadata, temp_files, video_files = build_all_nodes(
                     processed_metadata_list,
-                    self.is_auto_pack,
-                    self.large_video_threshold_mb,
-                    self.max_video_size_mb,
-                    self.enable_text_metadata
+                    self.config_manager.is_auto_pack,
+                    self.config_manager.large_video_threshold_mb,
+                    self.config_manager.max_video_size_mb,
+                    self.config_manager.enable_text_metadata
                 )
                 
-                if self.debug_mode:
+                if self.config_manager.debug_mode:
                     self.logger.debug(
                         f"节点构建完成: {len(all_link_nodes)} 个链接节点, "
                         f"{len(temp_files)} 个临时文件, {len(video_files)} 个视频文件"
                     )
                 
                 if not all_link_nodes:
-                    if self.debug_mode:
+                    if self.config_manager.debug_mode:
                         self.logger.debug("未构建任何节点，跳过发送")
                     return
                 
-                if self.debug_mode:
-                    self.logger.debug(f"开始发送结果，打包模式: {self.is_auto_pack}")
-                await self.message_manager.send_results(
-                    event,
-                    all_link_nodes,
-                    link_metadata,
-                    sender_name,
-                    sender_id,
-                    self.is_auto_pack,
-                    self.large_video_threshold_mb
-                )
-                if self.debug_mode:
+                if self.config_manager.debug_mode:
+                    self.logger.debug(f"开始发送结果，打包模式: {self.config_manager.is_auto_pack}")
+                
+                if self.config_manager.is_auto_pack:
+                    await self.message_sender.send_packed_results(
+                        event,
+                        link_metadata,
+                        sender_name,
+                        sender_id,
+                        self.config_manager.large_video_threshold_mb
+                    )
+                else:
+                    await self.message_sender.send_unpacked_results(
+                        event,
+                        all_link_nodes,
+                        link_metadata
+                    )
+
+                if self.config_manager.debug_mode:
                     self.logger.debug("发送完成")
             except Exception as e:
                 self.logger.exception(
@@ -316,5 +282,5 @@ class VideoParserPlugin(Star):
             finally:
                 if temp_files or video_files:
                     cleanup_files(temp_files + video_files)
-                    if self.debug_mode:
+                    if self.config_manager.debug_mode:
                         self.logger.debug(f"已清理临时文件: {len(temp_files)} 个, 视频文件: {len(video_files)} 个")

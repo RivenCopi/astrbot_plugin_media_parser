@@ -32,10 +32,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 
-try:
-    from astrbot.api import logger
-except ImportError:
-    logger = logging.getLogger(__name__)
+from core.logger import logger
 
 
 def print_metadata(metadata: Dict[str, Any], url: str, parser_name: str):
@@ -306,8 +303,12 @@ async def main(
         KuaishouParser(),
         WeiboParser(),
         XiaohongshuParser(),
-        XiaoheiheParser(),
+        XiaoheiheParser(
+            use_video_proxy=use_proxy,
+            proxy_url=proxy_url
+        ) if use_proxy and proxy_url else XiaoheiheParser(),
         TwitterParser(
+            use_parse_proxy=use_proxy,
             use_image_proxy=use_proxy,
             use_video_proxy=use_proxy,
             proxy_url=proxy_url

@@ -3,11 +3,8 @@ from typing import Optional, Dict, Any, List
 
 import aiohttp
 
-try:
-    from astrbot.api import logger
-except ImportError:
-    import logging
-    logger = logging.getLogger(__name__)
+from ...logger import logger
+from ...types import MediaMetadata
 
 
 class BaseVideoParser(ABC):
@@ -50,7 +47,7 @@ class BaseVideoParser(ABC):
         self,
         session: aiohttp.ClientSession,
         url: str
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[MediaMetadata]:
         """解析单个视频链接
 
         Args:
@@ -75,4 +72,31 @@ class BaseVideoParser(ABC):
             解析失败时直接raise异常，不记录日志
         """
         pass
+
+    def _add_range_prefix_to_video_urls(self, video_urls: List[List[str]]) -> List[List[str]]:
+        """为视频URL列表添加 range: 前缀
+        
+        Args:
+            video_urls: 视频URL列表（二维列表）
+            
+        Returns:
+            添加了 range: 前缀的视频URL列表
+        """
+        if not video_urls:
+            return video_urls
+        
+        result = []
+        for url_list in video_urls:
+            if url_list and isinstance(url_list, list):
+                prefixed_list = []
+                for url in url_list:
+                    if url and not url.startswith('range:'):
+                        prefixed_list.append(f'range:{url}')
+                    else:
+                        prefixed_list.append(url)
+                result.append(prefixed_list)
+            else:
+                result.append(url_list)
+        
+        return result
 

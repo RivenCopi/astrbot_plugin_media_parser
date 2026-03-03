@@ -14,6 +14,8 @@ astrbot_plugin_media_parser/
 ├── run_local.py                     # 本地测试工具脚本
 ├── core/
 │   ├── config_manager.py            # 配置管理器
+│   ├── logger.py                    # 统一日志打印器
+│   ├── types.py                     # 类型定义
 │   ├── constants.py                 # 常量定义
 │   ├── file_cleaner.py              # 文件清理工具
 │   ├── parser/                      # 解析器模块
@@ -41,7 +43,7 @@ astrbot_plugin_media_parser/
 │   │       ├── range_video.py       # 分片视频下载器
 │   │       └── m3u8.py              # M3U8流媒体下载器
 │   └── message_adapter/             # 消息适配器模块
-│       ├── manager.py                # 消息管理器
+│       ├── __init__.py              # 暴露 Sender 和 Builder
 │       ├── node_builder.py          # 节点构建器
 │       └── sender.py                # 消息发送器
 ```
@@ -55,21 +57,15 @@ astrbot_plugin_media_parser/
   - 协调各模块工作流程
   - 处理插件生命周期
 
-#### 1.3.2 配置管理模块 (config_manager.py)
-- **ConfigManager**: 配置管理器
-  - 解析配置文件
-  - 管理解析器启用状态
-  - 管理下载配置（缓存目录、预下载模式、最大并发下载数等）
-  - 管理代理配置
-    - 全局代理地址（proxy_addr）
-    - Twitter分项代理（解析、图片、视频）
-    - 小黑盒视频代理
-  - 处理代理配置（从元数据中读取平台特定的代理设置）
-  - 管理触发设置（自动解析、关键词触发）
-  - 管理权限设置（个人/群组黑白名单及其控制开关）
-  - 管理文本发送配置（开场语、是否附加纯文本元数据等）
-  - 管理视频大小限制设置
-  - 创建解析器实例列表（根据启用状态和代理配置）
+#### 1.3.2 核心支撑组件
+- **ConfigManager** (config_manager.py): 配置管理器
+  - 解析配置文件，管理解析器启用状态与下载配置
+  - 管理触发设置与黑白名单权限
+  - 处理各项代理配置并在运行时下发
+- **Logger** (logger.py): 日志记录器
+  - 导出全局统一的 `logger` 对象，方便各模块导入使用
+- **Types** (types.py): 类型模块
+  - 提供 `MediaMetadata` 等 TypedDict，规范系统间数据流
 
 #### 1.3.3 解析器模块 (parser/)
 - **ParserManager**: 解析器管理器
@@ -122,16 +118,13 @@ astrbot_plugin_media_parser/
   - 处理HEAD请求失败时的GET回退
 
 #### 1.3.5 消息适配器模块 (message_adapter/)
-- **MessageManager**: 消息管理器
-  - 协调节点构建和消息发送
-  - 获取发送者信息
-
 - **NodeBuilder**: 节点构建器
   - 构建文本节点（标题、作者、描述等）
   - 构建媒体节点（图片、视频）
   - 处理打包逻辑（大视频单独发送）
 
 - **MessageSender**: 消息发送器
+  - 获取发送者信息（`get_sender_info`）
   - 打包模式发送（使用Nodes）
   - 非打包模式发送（独立发送）
   - 处理大媒体单独发送逻辑
@@ -327,8 +320,6 @@ downloader::manager::DownloadManager.process_metadata()
 ```
 main.py::VideoParserPlugin.auto_parse()
   ↓
-message_adapter::manager::MessageManager.build_nodes()
-  ↓
 message_adapter::node_builder::build_all_nodes()
   ├─ 遍历所有元数据
   │   └─ message_adapter::node_builder::build_nodes_for_link()
@@ -359,8 +350,6 @@ message_adapter::node_builder::build_all_nodes()
 
 ```
 main.py::VideoParserPlugin.auto_parse()
-  ↓
-message_adapter::manager::MessageManager.send_results()
   ↓
 判断发送模式
   ├─ 打包模式 (is_auto_pack = True)
@@ -471,7 +460,6 @@ file_cleaner::cleanup_directory()
 ### 3.1 管理器模式
 - **ParserManager**: 统一管理所有解析器
 - **DownloadManager**: 统一管理下载流程
-- **MessageManager**: 统一管理消息构建和发送
 
 ### 3.2 路由模式
 - **LinkRouter**: 根据URL特征路由到对应解析器

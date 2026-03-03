@@ -10,11 +10,7 @@ from urllib.parse import urljoin
 
 import aiohttp
 
-try:
-    from astrbot.api import logger
-except ImportError:
-    import logging
-    logger = logging.getLogger(__name__)
+from ...logger import logger
 
 from ...file_cleaner import cleanup_directory
 from ...constants import Config
