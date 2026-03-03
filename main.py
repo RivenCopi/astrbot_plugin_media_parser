@@ -26,7 +26,7 @@ from .core.config_manager import ConfigManager
     "astrbot_plugin_media_parser",
     "drdon1234",
     "聚合解析流媒体平台链接，转换为媒体直链发送",
-    "4.3.1"
+    "4.3.2"
 )
 class VideoParserPlugin(Star):
 
@@ -56,6 +56,17 @@ class VideoParserPlugin(Star):
             "user": self.config_manager.whitelist_user,
             "group": self.config_manager.whitelist_group
         }
+        
+        self.blacklist = {
+            "enable": self.config_manager.blacklist_enable,
+            "user": self.config_manager.blacklist_user,
+            "group": self.config_manager.blacklist_group
+        }
+        
+        self.enable_opening_msg = self.config_manager.enable_opening_msg
+        self.opening_msg_content = self.config_manager.opening_msg_content
+        self.enable_text_metadata = self.config_manager.enable_text_metadata
+
         
         parsers = self.config_manager.create_parsers()
         self.parser_manager = ParserManager(parsers)
@@ -103,19 +114,25 @@ class VideoParserPlugin(Star):
         Args:
             event: 消息事件对象
         """
-        # 白名单检查
         is_private = event.is_private_chat()
         sender_id = event.get_sender_id()
         group_id = None if is_private else event.get_group_id()
 
-        if not self.whitelist["enable"]:
+        allowed = None
+        if self.whitelist["enable"] and sender_id in self.whitelist["user"]:
             allowed = True
-        elif sender_id in self.whitelist["user"]:
-            allowed = True
-        elif not is_private and group_id in self.whitelist["group"]:
-            allowed = True
-        else:
+        elif self.blacklist["enable"] and sender_id in self.blacklist["user"]:
             allowed = False
+        elif self.whitelist["enable"] and not is_private and group_id in self.whitelist["group"]:
+            allowed = True
+        elif self.blacklist["enable"] and not is_private and group_id in self.blacklist["group"]:
+            allowed = False
+            
+        if allowed is None:
+            if self.whitelist["enable"]:
+                allowed = False
+            else:
+                allowed = True
 
         if not allowed:
             return
@@ -128,7 +145,6 @@ class VideoParserPlugin(Star):
                 msg_data = first_msg.data
                 curl_link = None
         
-                # 方式1: msg_data 已经是解析好的字典
                 if isinstance(msg_data, dict) and not msg_data.get('data'):
                     meta = msg_data.get("meta") or {}
                     detail_1 = meta.get("detail_1") or {}
@@ -137,7 +153,6 @@ class VideoParserPlugin(Star):
                         news = meta.get("news") or {}
                         curl_link = news.get("jumpUrl")
         
-                # 方式2: msg_data 是 {'data': 'json字符串'} 格式
                 if not curl_link:
                     json_str = msg_data.get('data', '') if isinstance(msg_data, dict) else msg_data
                     if json_str and isinstance(json_str, str):
@@ -193,7 +208,9 @@ class VideoParserPlugin(Star):
                     self.logger.debug("解析后未获得任何有效元数据（可能是直播链接或解析失败）")
                 return
             
-            await event.send(event.plain_result("流媒体解析bot为您服务 ٩( 'ω' )و"))
+            if self.enable_opening_msg:
+                msg_text = self.opening_msg_content if self.opening_msg_content else "流媒体解析bot为您服务 ٩( 'ω' )و"
+                await event.send(event.plain_result(msg_text))
             
             if self.debug_mode:
                 self.logger.debug(f"解析获得 {len(metadata_list)} 条元数据")
@@ -262,7 +279,8 @@ class VideoParserPlugin(Star):
                     processed_metadata_list,
                     self.is_auto_pack,
                     self.large_video_threshold_mb,
-                    self.max_video_size_mb
+                    self.max_video_size_mb,
+                    self.enable_text_metadata
                 )
                 
                 if self.debug_mode:

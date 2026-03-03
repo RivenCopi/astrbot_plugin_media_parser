@@ -720,7 +720,7 @@ class DownloadManager:
             if not has_valid_media:
                 metadata['exceeds_max_size'] = False
                 metadata['file_paths'] = image_file_paths
-                metadata['use_local_files'] = has_valid_images  # 只有图片可能使用本地文件
+                metadata['use_local_files'] = has_valid_images
                 metadata['failed_video_count'] = len(video_urls) if video_urls else 0
                 metadata['failed_image_count'] = failed_image_count
                 return metadata

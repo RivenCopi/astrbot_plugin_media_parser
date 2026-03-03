@@ -12,17 +12,22 @@ from astrbot.api.message_components import Plain, Image, Video, Node, Nodes
 from ..file_cleaner import cleanup_file
 
 
-def build_text_node(metadata: Dict[str, Any], max_video_size_mb: float = 0.0) -> Optional[Plain]:
+def build_text_node(metadata: Dict[str, Any], max_video_size_mb: float = 0.0, enable_text_metadata: bool = True) -> Optional[Plain]:
     """构建文本节点
 
     Args:
         metadata: 元数据字典
         max_video_size_mb: 最大允许的视频大小(MB)，用于显示详细的错误信息
+        enable_text_metadata: 是否包含视频图文文本信息的附加文本
 
     Returns:
         Plain文本节点，无内容时为None
     """
+    if not enable_text_metadata:
+        return None
+        
     text_parts = []
+    
     if metadata.get('title'):
         text_parts.append(f"标题：{metadata['title']}")
     if metadata.get('author'):
@@ -217,7 +222,8 @@ def build_media_nodes(
 def build_nodes_for_link(
     metadata: Dict[str, Any],
     use_local_files: bool = False,
-    max_video_size_mb: float = 0.0
+    max_video_size_mb: float = 0.0,
+    enable_text_metadata: bool = True
 ) -> List[Union[Plain, Image, Video]]:
     """构建单个链接的节点列表
 
@@ -225,13 +231,14 @@ def build_nodes_for_link(
         metadata: 元数据字典
         use_local_files: 是否使用本地文件
         max_video_size_mb: 最大允许的视频大小(MB)，用于显示详细的错误信息
+        enable_text_metadata: 是否发送图文文本消息
 
     Returns:
         节点列表（Plain、Image、Video对象）
     """
     nodes = []
     
-    text_node = build_text_node(metadata, max_video_size_mb)
+    text_node = build_text_node(metadata, max_video_size_mb, enable_text_metadata)
     if text_node:
         nodes.append(text_node)
     
@@ -265,7 +272,8 @@ def build_all_nodes(
     metadata_list: List[Dict[str, Any]],
     is_auto_pack: bool,
     large_video_threshold_mb: float = 0.0,
-    max_video_size_mb: float = 0.0
+    max_video_size_mb: float = 0.0,
+    enable_text_metadata: bool = True
 ) -> Tuple[List[List[Union[Plain, Image, Video]]], List[Dict], List[str], List[str]]:
     """构建所有链接的节点，处理消息打包逻辑
 
@@ -274,6 +282,7 @@ def build_all_nodes(
         is_auto_pack: 是否打包为Node
         large_video_threshold_mb: 大视频阈值(MB)
         max_video_size_mb: 最大允许的视频大小(MB)，用于显示错误信息
+        enable_text_metadata: 是否发送图文文本消息
 
     Returns:
         包含(all_link_nodes, link_metadata, temp_files, video_files)的元组
@@ -305,7 +314,8 @@ def build_all_nodes(
         link_nodes = build_nodes_for_link(
             metadata,
             use_local_files,
-            max_video_size_mb
+            max_video_size_mb,
+            enable_text_metadata
         )
         
         logger.debug(f"节点构建完成[{idx}]: {url}, 节点数量: {len(link_nodes)}")

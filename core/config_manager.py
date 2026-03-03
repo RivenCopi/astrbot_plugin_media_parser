@@ -44,10 +44,25 @@ class ConfigManager:
             ["视频解析", "解析视频"]
         )
         
-        whitelist = self._config.get("whitelist", {})
+        permissions = self._config.get("permissions", {})
+        whitelist = permissions.get("whitelist", {})
+        blacklist = permissions.get("blacklist", {})
+        
         self.whitelist_enable = whitelist.get("enable", False)
         self.whitelist_user = whitelist.get("user", [])
         self.whitelist_group = whitelist.get("group", [])
+        
+        self.blacklist_enable = blacklist.get("enable", False)
+        self.blacklist_user = blacklist.get("user", [])
+        self.blacklist_group = blacklist.get("group", [])
+        
+        text_settings = self._config.get("text_settings", {})
+        self.enable_opening_msg = text_settings.get("enable_opening_msg", True)
+        self.opening_msg_content = text_settings.get(
+            "opening_msg_content",
+            "流媒体解析bot为您服务 ٩( 'ω' )و"
+        )
+        self.enable_text_metadata = text_settings.get("enable_text_metadata", True)
         
         video_size_settings = self._config.get("video_size_settings", {})
         self.max_video_size_mb = video_size_settings.get("max_video_size_mb", 0.0)

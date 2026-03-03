@@ -31,7 +31,8 @@ class MessageManager:
         metadata_list: List[Dict[str, Any]],
         is_auto_pack: bool,
         large_video_threshold_mb: float = 0.0,
-        max_video_size_mb: float = 0.0
+        max_video_size_mb: float = 0.0,
+        enable_text_metadata: bool = True
     ) -> Tuple[List[List], List[Dict], List[str], List[str]]:
         """构建所有链接的节点
 
@@ -40,6 +41,7 @@ class MessageManager:
             is_auto_pack: 是否打包为Node
             large_video_threshold_mb: 大视频阈值(MB)
             max_video_size_mb: 最大允许的视频大小(MB)，用于显示错误信息
+            enable_text_metadata: 是否发送图文文本消息
 
         Returns:
             包含(all_link_nodes, link_metadata, temp_files, video_files)的元组
@@ -48,7 +50,8 @@ class MessageManager:
             metadata_list,
             is_auto_pack,
             large_video_threshold_mb,
-            max_video_size_mb
+            max_video_size_mb,
+            enable_text_metadata
         )
 
     async def send_results(
