@@ -1,13 +1,13 @@
 """消息节点构建器，将解析结果转换为可发送消息节点。"""
 import os
-from typing import Dict, Any, List, Optional, Tuple, Union
+from typing import Dict, Any, List, Optional, Union
 
 from ..logger import logger
 
 from astrbot.api.message_components import Plain, Image, Video, Node, Nodes
 
-from ..storage import cleanup_file
 from ..downloader.utils import strip_media_prefixes
+from ..types import BuildAllNodesResult, LinkBuildMeta
 
 
 def build_text_node(metadata: Dict[str, Any], max_video_size_mb: float = 0.0, enable_text_metadata: bool = True) -> Optional[Plain]:
@@ -282,7 +282,6 @@ def build_media_nodes(
                 nodes.append(Image.fromFileSystem(file_paths[file_idx]))
             except Exception as e:
                 logger.warning(f"构建图片节点失败: {file_paths[file_idx]}, 错误: {e}")
-                cleanup_file(file_paths[file_idx])
         else:
             try:
                 nodes.append(Image.fromURL(image_url))
@@ -350,7 +349,7 @@ def build_all_nodes(
     large_video_threshold_mb: float = 0.0,
     max_video_size_mb: float = 0.0,
     enable_text_metadata: bool = True
-) -> Tuple[List[List[Union[Plain, Image, Video]]], List[Dict], List[str], List[str]]:
+) -> BuildAllNodesResult:
     """构建所有链接的节点，处理消息打包逻辑
 
     Args:
@@ -361,7 +360,7 @@ def build_all_nodes(
         enable_text_metadata: 是否发送图文文本消息
 
     Returns:
-        包含(all_link_nodes, link_metadata, temp_files, video_files)的元组
+        BuildAllNodesResult 命名元组
     """
     all_link_nodes = []
     link_metadata = []
@@ -413,13 +412,13 @@ def build_all_nodes(
                         temp_files.append(file_path)
         
         all_link_nodes.append(link_nodes)
-        link_metadata.append({
-            'link_nodes': link_nodes,
-            'is_large_media': is_large_media,
-            'is_normal': not is_large_media,
-            'video_files': link_video_files,
-            'temp_files': link_temp_files
-        })
+        link_metadata.append(LinkBuildMeta(
+            link_nodes=link_nodes,
+            is_large_media=is_large_media,
+            is_normal=not is_large_media,
+            video_files=link_video_files,
+            temp_files=link_temp_files,
+        ))
     
     logger.debug(
         f"所有节点构建完成: "
@@ -428,5 +427,5 @@ def build_all_nodes(
         f"视频文件: {len(video_files)}"
     )
     
-    return all_link_nodes, link_metadata, temp_files, video_files
+    return BuildAllNodesResult(all_link_nodes, link_metadata, temp_files, video_files)
 

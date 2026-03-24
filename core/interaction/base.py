@@ -5,6 +5,8 @@ from typing import Any, Optional, Set
 
 from astrbot.api.event import AstrMessageEvent
 
+from ..logger import logger
+
 
 class AdminAssistManager(ABC):
     """管理员协助交互基类。"""
@@ -51,6 +53,7 @@ class AdminAssistManager(ABC):
         """若消息来自管理员私聊，更新可用的私聊会话标识。"""
         if self._is_admin_private_event(event):
             self._admin_private_origin = event.unified_msg_origin
+            logger.debug("已更新管理员私聊会话标识")
 
     def _new_task(self, coro) -> None:
         """登记后台任务并在任务结束后自动回收引用。"""
@@ -89,6 +92,9 @@ class AdminAssistManager(ABC):
 
     async def shutdown(self) -> None:
         """关闭管理器并等待所有后台任务安全结束。"""
+        active = sum(1 for t in self._tasks if not t.done())
+        if active:
+            logger.debug(f"AdminAssistManager 关闭: 取消 {active} 个后台任务")
         for task in list(self._tasks):
             if not task.done():
                 task.cancel()

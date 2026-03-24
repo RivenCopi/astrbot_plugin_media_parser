@@ -1,7 +1,8 @@
 """配置管理模块，负责默认值处理、类型转换与配置兜底。"""
 import os
 import tempfile
-from typing import List
+from dataclasses import dataclass, field
+from typing import Any, List
 
 from .logger import logger
 
@@ -30,38 +31,144 @@ BILIBILI_QUALITY_MAP = {
 }
 
 
+# ── 配置分组 dataclass ──────────────────────────────────
+
+
+@dataclass
+class TriggerConfig:
+    auto_parse: bool = True
+    keywords: List[str] = field(default_factory=lambda: ["视频解析", "解析视频"])
+    reply_trigger: bool = False
+
+    def has_keyword(self, text: str) -> bool:
+        for kw in self.keywords:
+            if kw in text:
+                return True
+        return False
+
+    def should_parse(self, message_str: str) -> bool:
+        if self.auto_parse:
+            return True
+        return self.has_keyword(message_str)
+
+
+@dataclass
+class MessageConfig:
+    auto_pack: bool = False
+    opening_enabled: bool = True
+    opening_content: str = "流媒体解析bot为您服务 ٩( 'ω' )و"
+    text_metadata: bool = True
+    hot_comment_count: int = 0
+    hot_comment_bilibili: bool = True
+    hot_comment_weibo: bool = True
+    hot_comment_xiaohongshu: bool = True
+
+
+@dataclass
+class PermissionConfig:
+    admin_id: str = ""
+    whitelist_enable: bool = False
+    whitelist_user: List[str] = field(default_factory=list)
+    whitelist_group: List[str] = field(default_factory=list)
+    blacklist_enable: bool = False
+    blacklist_user: List[str] = field(default_factory=list)
+    blacklist_group: List[str] = field(default_factory=list)
+
+    def check(self, is_private: bool, sender_id: Any, group_id: Any) -> bool:
+        """检查用户或群组是否有权限使用解析"""
+        sender_id_str = str(sender_id or "").strip()
+        group_id_str = "" if is_private else str(group_id or "").strip()
+
+        if self.admin_id and sender_id_str == self.admin_id:
+            return True
+
+        allowed = None
+        if self.whitelist_enable and sender_id_str in self.whitelist_user:
+            allowed = True
+        elif self.blacklist_enable and sender_id_str in self.blacklist_user:
+            allowed = False
+        elif self.whitelist_enable and group_id_str and group_id_str in self.whitelist_group:
+            allowed = True
+        elif self.blacklist_enable and group_id_str and group_id_str in self.blacklist_group:
+            allowed = False
+
+        if allowed is None:
+            allowed = not self.whitelist_enable
+
+        return allowed
+
+
+@dataclass
+class DownloadConfig:
+    max_video_size_mb: float = 1000.0
+    large_video_threshold_mb: float = Config.DEFAULT_LARGE_VIDEO_THRESHOLD_MB
+    cache_dir: str = ""
+    pre_download_all_media: bool = False
+    max_concurrent_downloads: int = Config.DOWNLOAD_MANAGER_MAX_CONCURRENT
+
+
+@dataclass
+class ProxyConfig:
+    address: str = ""
+    xiaoheihe_use_video_proxy: bool = True
+    twitter_use_parse_proxy: bool = False
+    twitter_use_image_proxy: bool = True
+    twitter_use_video_proxy: bool = True
+
+
+@dataclass
+class BilibiliEnhancedConfig:
+    use_cookie: bool = False
+    cookie: str = ""
+    max_quality: int = 0
+    cookie_feature_requested: bool = False
+    cookie_runtime_enabled: bool = False
+    cookie_runtime_file: str = ""
+    enable_admin_assist: bool = False
+    admin_reply_timeout_minutes: int = 1440
+    admin_request_cooldown_minutes: int = 1440
+
+
+@dataclass
+class MediaRelayConfig:
+    enabled: bool = False
+    callback_api_base: str = ""
+    file_token_ttl: int = 300
+
+
+@dataclass
+class AdminConfig:
+    clean_cache_keyword: str = "清理媒体"
+    debug_mode: bool = False
+
+
+# ── 配置管理器 ──────────────────────────────────────────
+
+
 class ConfigManager:
 
     """配置读取门面，向业务层提供类型安全的配置访问。"""
     def __init__(self, config: dict):
-        """初始化配置管理器
-
-        Args:
-            config: 原始配置字典
-
-        Raises:
-            ValueError: 没有启用任何解析器时
-        """
         self._config = config
         self.bilibili_parser = None
         self._parse_config()
 
+    # ── 内部解析 ────────────────────────────────────────
+
     def _parse_config(self):
-        """解析配置。"""
+        """解析原始 dict，填充各领域配置分组。"""
 
         # --- trigger ---
-        trigger = self._config.get("trigger", {})
-        self.is_auto_parse = trigger.get("auto_parse", True)
-        self.trigger_keywords = trigger.get(
-            "keywords", ["视频解析", "解析视频"]
-        )
-        self.enable_reply_trigger = bool(
-            trigger.get("reply_trigger", False)
+        trigger_raw = self._config.get("trigger", {})
+        self.trigger = TriggerConfig(
+            auto_parse=trigger_raw.get("auto_parse", True),
+            keywords=trigger_raw.get("keywords", ["视频解析", "解析视频"]),
+            reply_trigger=bool(trigger_raw.get("reply_trigger", False)),
         )
         if (
-            not self.is_auto_parse
-            and not self.trigger_keywords
-            and not self.enable_reply_trigger
+            not self.trigger.auto_parse
+            and not self.trigger.keywords
+            and not self.trigger.reply_trigger
         ):
             logger.warning(
                 "自动解析已关闭且未配置任何触发关键词，"
@@ -69,63 +176,67 @@ class ConfigManager:
             )
 
         # --- message ---
-        message = self._config.get("message", {})
-        self.is_auto_pack = message.get("auto_pack", False)
-
-        opening = message.get("opening", {})
-        self.enable_opening_msg = opening.get("enable", True)
-        self.opening_msg_content = opening.get(
-            "content", "流媒体解析bot为您服务 ٩( 'ω' )و"
-        )
-
-        self.enable_text_metadata = message.get("text_metadata", True)
-
-        hot_comments = message.get("hot_comments", {})
+        message_raw = self._config.get("message", {})
+        opening = message_raw.get("opening", {})
+        hot_comments = message_raw.get("hot_comments", {})
         if not isinstance(hot_comments, dict):
             hot_comments = {}
-        self.hot_comment_count = self._parse_non_negative_int(
+
+        text_metadata_enabled = message_raw.get("text_metadata", True)
+        hot_count = self._parse_non_negative_int(
             hot_comments.get("count", 0), 0
         )
-        self.hot_comment_bilibili = bool(hot_comments.get("bilibili", True))
-        self.hot_comment_weibo = bool(hot_comments.get("weibo", True))
-        self.hot_comment_xiaohongshu = bool(
-            hot_comments.get("xiaohongshu", True)
+        if not text_metadata_enabled:
+            hot_count = 0
+
+        self.message = MessageConfig(
+            auto_pack=message_raw.get("auto_pack", False),
+            opening_enabled=opening.get("enable", True),
+            opening_content=opening.get(
+                "content", "流媒体解析bot为您服务 ٩( 'ω' )و"
+            ),
+            text_metadata=text_metadata_enabled,
+            hot_comment_count=hot_count,
+            hot_comment_bilibili=bool(hot_comments.get("bilibili", True)),
+            hot_comment_weibo=bool(hot_comments.get("weibo", True)),
+            hot_comment_xiaohongshu=bool(
+                hot_comments.get("xiaohongshu", True)
+            ),
         )
-        if not self.enable_text_metadata:
-            self.hot_comment_count = 0
 
         # --- permissions ---
-        permissions = self._config.get("permissions", {})
-        whitelist = permissions.get("whitelist", {})
-        blacklist = permissions.get("blacklist", {})
-        self.admin_id = str(permissions.get("admin_id", "") or "").strip()
+        permissions_raw = self._config.get("permissions", {})
+        whitelist = permissions_raw.get("whitelist", {})
+        blacklist = permissions_raw.get("blacklist", {})
+        admin_id = str(permissions_raw.get("admin_id", "") or "").strip()
+        wl_user = self._normalize_id_list(whitelist.get("user", []))
+        if admin_id and admin_id not in wl_user:
+            wl_user.append(admin_id)
 
-        self.whitelist_enable = whitelist.get("enable", False)
-        self.whitelist_user = self._normalize_id_list(
-            whitelist.get("user", [])
-        )
-        if self.admin_id and self.admin_id not in self.whitelist_user:
-            self.whitelist_user.append(self.admin_id)
-        self.whitelist_group = self._normalize_id_list(
-            whitelist.get("group", [])
-        )
-
-        self.blacklist_enable = blacklist.get("enable", False)
-        self.blacklist_user = self._normalize_id_list(
-            blacklist.get("user", [])
-        )
-        self.blacklist_group = self._normalize_id_list(
-            blacklist.get("group", [])
+        self.permission = PermissionConfig(
+            admin_id=admin_id,
+            whitelist_enable=whitelist.get("enable", False),
+            whitelist_user=wl_user,
+            whitelist_group=self._normalize_id_list(
+                whitelist.get("group", [])
+            ),
+            blacklist_enable=blacklist.get("enable", False),
+            blacklist_user=self._normalize_id_list(
+                blacklist.get("user", [])
+            ),
+            blacklist_group=self._normalize_id_list(
+                blacklist.get("group", [])
+            ),
         )
 
         # --- download ---
-        download = self._config.get("download", {})
+        download_raw = self._config.get("download", {})
 
-        self.max_video_size_mb = self._parse_non_negative_float(
-            download.get("max_video_size_mb", 1000.0), 1000.0
+        max_video_size_mb = self._parse_non_negative_float(
+            download_raw.get("max_video_size_mb", 1000.0), 1000.0
         )
         large_video_threshold_mb = self._parse_non_negative_float(
-            download.get(
+            download_raw.get(
                 "large_video_threshold_mb",
                 Config.MAX_LARGE_VIDEO_THRESHOLD_MB
             ),
@@ -136,28 +247,27 @@ class ConfigManager:
                 large_video_threshold_mb,
                 Config.MAX_LARGE_VIDEO_THRESHOLD_MB
             )
-        self.large_video_threshold_mb = large_video_threshold_mb
 
         configured_cache_dir = str(
-            download.get("cache_dir", "") or ""
+            download_raw.get("cache_dir", "") or ""
         ).strip()
         if (
             not configured_cache_dir
             or configured_cache_dir == Config.DEFAULT_CACHE_DIR
         ):
             if os.path.exists('/.dockerenv'):
-                self.cache_dir = Config.DEFAULT_CACHE_DIR
+                cache_dir = Config.DEFAULT_CACHE_DIR
             else:
-                self.cache_dir = os.path.join(
+                cache_dir = os.path.join(
                     tempfile.gettempdir(), "astrbot_media_parser_cache"
                 )
         else:
-            self.cache_dir = configured_cache_dir
+            cache_dir = configured_cache_dir
 
-        self.pre_download_all_media = download.get("pre_download", False)
-        self.max_concurrent_downloads = min(
+        pre_download = download_raw.get("pre_download", False)
+        max_concurrent = min(
             self._parse_positive_int(
-                download.get(
+                download_raw.get(
                     "max_concurrent",
                     Config.DOWNLOAD_MANAGER_MAX_CONCURRENT
                 ),
@@ -167,138 +277,223 @@ class ConfigManager:
         )
 
         # --- media_relay ---
-        relay = self._config.get("media_relay", {})
-        self.use_file_token_service = relay.get("enable", False)
-        self.callback_api_base = str(
-            relay.get("callback_url", "") or ""
-        ).strip().rstrip("/")
-        self.file_token_ttl = max(
-            30,
-            self._parse_positive_int(relay.get("ttl", 300), 300)
+        relay_raw = self._config.get("media_relay", {})
+        self.relay = MediaRelayConfig(
+            enabled=relay_raw.get("enable", False),
+            callback_api_base=str(
+                relay_raw.get("callback_url", "") or ""
+            ).strip().rstrip("/"),
+            file_token_ttl=max(
+                30,
+                self._parse_positive_int(relay_raw.get("ttl", 300), 300)
+            ),
         )
-        if self.use_file_token_service:
-            self.cache_dir = os.path.join(
+
+        if self.relay.enabled:
+            cache_dir = os.path.join(
                 tempfile.gettempdir(),
                 "astrbot_media_parser_relay_cache"
             )
-            self.pre_download_all_media = True
+            pre_download = True
             logger.info(
-                f"媒体中转模式已启用，缓存目录: {self.cache_dir}，"
+                f"媒体中转模式已启用，缓存目录: {cache_dir}，"
                 f"预下载已强制开启"
             )
 
-        if self.pre_download_all_media:
-            if not check_cache_dir_available(self.cache_dir):
+        if pre_download:
+            if not check_cache_dir_available(cache_dir):
                 logger.warning(
-                    f"预下载模式已启用，但缓存目录不可用: {self.cache_dir}，"
+                    f"预下载模式已启用，但缓存目录不可用: {cache_dir}，"
                     f"将自动降级为禁用预下载模式"
                 )
-                self.pre_download_all_media = False
+                pre_download = False
+
+        self.download = DownloadConfig(
+            max_video_size_mb=max_video_size_mb,
+            large_video_threshold_mb=large_video_threshold_mb,
+            cache_dir=cache_dir,
+            pre_download_all_media=pre_download,
+            max_concurrent_downloads=max_concurrent,
+        )
 
         # --- bilibili_enhanced ---
         bili = self._config.get("bilibili_enhanced", {})
         if not isinstance(bili, dict):
             bili = {}
 
-        self.bilibili_use_cookie_for_parsing = bool(
-            bili.get("use_cookie", False)
-        )
-        if self.bilibili_use_cookie_for_parsing:
-            self.bilibili_cookie = str(
-                bili.get("cookie", "") or ""
-            ).strip()
+        use_cookie = bool(bili.get("use_cookie", False))
+        if use_cookie:
+            cookie = str(bili.get("cookie", "") or "").strip()
             max_quality_label = str(
                 bili.get("max_quality", "不限制") or "不限制"
             ).strip()
-            self.bilibili_max_quality = BILIBILI_QUALITY_MAP.get(
-                max_quality_label, 0
+            max_quality = BILIBILI_QUALITY_MAP.get(max_quality_label, 0)
+            admin_assist_raw = bili.get("admin_assist", {})
+            if not isinstance(admin_assist_raw, dict):
+                admin_assist_raw = {}
+            enable_admin_assist = bool(
+                admin_assist_raw.get("enable", False)
             )
-            admin_assist = bili.get("admin_assist", {})
-            if not isinstance(admin_assist, dict):
-                admin_assist = {}
-            self.bilibili_enable_admin_assist_on_expire = bool(
-                admin_assist.get("enable", False)
+            admin_reply_timeout = self._parse_positive_int(
+                admin_assist_raw.get("reply_timeout_minutes", 1440), 1440
             )
-            self.bilibili_admin_reply_timeout_minutes = self._parse_positive_int(
-                admin_assist.get("reply_timeout_minutes", 1440), 1440
-            )
-            self.bilibili_admin_request_cooldown_minutes = self._parse_positive_int(
-                admin_assist.get("request_cooldown_minutes", 1440), 1440
+            admin_request_cooldown = self._parse_positive_int(
+                admin_assist_raw.get("request_cooldown_minutes", 1440), 1440
             )
         else:
-            self.bilibili_cookie = ""
-            self.bilibili_max_quality = 0
-            self.bilibili_enable_admin_assist_on_expire = False
-            self.bilibili_admin_reply_timeout_minutes = 1440
-            self.bilibili_admin_request_cooldown_minutes = 1440
+            cookie = ""
+            max_quality = 0
+            enable_admin_assist = False
+            admin_reply_timeout = 1440
+            admin_request_cooldown = 1440
 
-        self.bilibili_cookie_feature_requested = self.bilibili_use_cookie_for_parsing
-        self.bilibili_cookie_runtime_enabled = bool(
-            self.bilibili_use_cookie_for_parsing and self.pre_download_all_media
-        )
+        cookie_feature_requested = use_cookie
+        cookie_runtime_enabled = bool(use_cookie and pre_download)
+
         runtime_file_name = "cookie.json"
         core_dir = os.path.dirname(os.path.abspath(__file__))
         cookie_dir = os.path.join(
             core_dir, "parser", "runtime_manager", "bilibili"
         )
-        self.bilibili_cookie_runtime_file = os.path.join(
-            cookie_dir, runtime_file_name
-        )
-        if self.bilibili_use_cookie_for_parsing:
+        cookie_runtime_file = os.path.join(cookie_dir, runtime_file_name)
+        if use_cookie:
             try:
                 os.makedirs(cookie_dir, exist_ok=True)
             except Exception as e:
                 logger.warning(
                     f"B站Cookie运行时目录不可用，将回退到缓存目录保存: {e}"
                 )
-                fallback_cookie_dir = os.path.join(
-                    self.cache_dir, "runtime_manager", "bilibili"
+                fallback = os.path.join(
+                    cache_dir, "runtime_manager", "bilibili"
                 )
-                self.bilibili_cookie_runtime_file = os.path.join(
-                    fallback_cookie_dir, runtime_file_name
+                cookie_runtime_file = os.path.join(
+                    fallback, runtime_file_name
                 )
-        if (
-            self.bilibili_cookie_feature_requested and
-            not self.bilibili_cookie_runtime_enabled
-        ):
+
+        if cookie_feature_requested and not cookie_runtime_enabled:
             logger.warning(
                 '检测到已开启"是否携带Cookie解析视频"，但预下载未启用或不可用，'
                 "将旁路B站Cookie与协助登录流程，直接使用无Cookie直链模式。"
             )
 
+        self.bilibili = BilibiliEnhancedConfig(
+            use_cookie=use_cookie,
+            cookie=cookie,
+            max_quality=max_quality,
+            cookie_feature_requested=cookie_feature_requested,
+            cookie_runtime_enabled=cookie_runtime_enabled,
+            cookie_runtime_file=cookie_runtime_file,
+            enable_admin_assist=enable_admin_assist,
+            admin_reply_timeout_minutes=admin_reply_timeout,
+            admin_request_cooldown_minutes=admin_request_cooldown,
+        )
+
         # --- parsers ---
-        parsers = self._config.get("parsers", {})
-        self.enable_bilibili = parsers.get("bilibili", True)
-        self.enable_douyin = parsers.get("douyin", True)
-        self.enable_kuaishou = parsers.get("kuaishou", True)
-        self.enable_weibo = parsers.get("weibo", True)
-        self.enable_xiaohongshu = parsers.get("xiaohongshu", True)
-        self.enable_xiaoheihe = parsers.get("xiaoheihe", True)
-        self.enable_twitter = parsers.get("twitter", True)
+        parsers_raw = self._config.get("parsers", {})
+        self._enable_bilibili = parsers_raw.get("bilibili", True)
+        self._enable_douyin = parsers_raw.get("douyin", True)
+        self._enable_kuaishou = parsers_raw.get("kuaishou", True)
+        self._enable_weibo = parsers_raw.get("weibo", True)
+        self._enable_xiaohongshu = parsers_raw.get("xiaohongshu", True)
+        self._enable_xiaoheihe = parsers_raw.get("xiaoheihe", True)
+        self._enable_twitter = parsers_raw.get("twitter", True)
 
         # --- proxy ---
-        proxy = self._config.get("proxy", {})
-        self.proxy_addr = proxy.get("address", "")
-        self.xiaoheihe_use_video_proxy = proxy.get("xiaoheihe_video", True)
-        twitter_proxy = proxy.get("twitter", {})
-        self.twitter_use_parse_proxy = twitter_proxy.get("parse", False)
-        self.twitter_use_image_proxy = twitter_proxy.get("image", True)
-        self.twitter_use_video_proxy = twitter_proxy.get("video", True)
+        proxy_raw = self._config.get("proxy", {})
+        twitter_proxy = proxy_raw.get("twitter", {})
+        self.proxy = ProxyConfig(
+            address=proxy_raw.get("address", ""),
+            xiaoheihe_use_video_proxy=proxy_raw.get("xiaoheihe_video", True),
+            twitter_use_parse_proxy=twitter_proxy.get("parse", False),
+            twitter_use_image_proxy=twitter_proxy.get("image", True),
+            twitter_use_video_proxy=twitter_proxy.get("video", True),
+        )
 
         # --- admin ---
-        admin = self._config.get("admin", {})
-        self.clean_cache_keyword = str(
-            admin.get("clean_cache_keyword", "清理媒体") or "清理媒体"
-        ).strip()
-        self.debug_mode = admin.get("debug", False)
-        if self.debug_mode:
+        admin_raw = self._config.get("admin", {})
+        self.admin = AdminConfig(
+            clean_cache_keyword=str(
+                admin_raw.get("clean_cache_keyword", "清理媒体") or "清理媒体"
+            ).strip(),
+            debug_mode=admin_raw.get("debug", False),
+        )
+        if self.admin.debug_mode:
             import logging
             logger.setLevel(logging.DEBUG)
             logger.debug("Debug模式已启用")
 
+    # ── 工厂方法 ────────────────────────────────────────
+
+    def _effective_hot_comment_count(self, enabled: bool) -> int:
+        if not self.message.text_metadata:
+            return 0
+        if not enabled:
+            return 0
+        return self.message.hot_comment_count
+
+    def create_parsers(self) -> List:
+        """根据配置创建并返回解析器列表。
+
+        Raises:
+            ValueError: 没有启用任何解析器时
+        """
+        parsers = []
+        bili_hc = self._effective_hot_comment_count(
+            self.message.hot_comment_bilibili
+        )
+        weibo_hc = self._effective_hot_comment_count(
+            self.message.hot_comment_weibo
+        )
+        xhs_hc = self._effective_hot_comment_count(
+            self.message.hot_comment_xiaohongshu
+        )
+        proxy_addr = self.proxy.address or None
+
+        if self._enable_bilibili:
+            self.bilibili_parser = BilibiliParser(
+                cookie_runtime_enabled=self.bilibili.cookie_runtime_enabled,
+                configured_cookie=self.bilibili.cookie,
+                max_quality=self.bilibili.max_quality,
+                admin_assist_enabled=self.bilibili.enable_admin_assist,
+                admin_reply_timeout_minutes=self.bilibili.admin_reply_timeout_minutes,
+                admin_request_cooldown_minutes=self.bilibili.admin_request_cooldown_minutes,
+                credential_path=self.bilibili.cookie_runtime_file,
+                hot_comment_count=bili_hc,
+            )
+            parsers.append(self.bilibili_parser)
+        if self._enable_douyin:
+            parsers.append(DouyinParser())
+        if self._enable_kuaishou:
+            parsers.append(KuaishouParser())
+        if self._enable_weibo:
+            parsers.append(WeiboParser(hot_comment_count=weibo_hc))
+        if self._enable_xiaohongshu:
+            parsers.append(XiaohongshuParser(hot_comment_count=xhs_hc))
+        if self._enable_xiaoheihe:
+            parsers.append(XiaoheiheParser(
+                use_video_proxy=self.proxy.xiaoheihe_use_video_proxy,
+                proxy_url=proxy_addr,
+            ))
+        if self._enable_twitter:
+            parsers.append(TwitterParser(
+                use_parse_proxy=self.proxy.twitter_use_parse_proxy,
+                use_image_proxy=self.proxy.twitter_use_image_proxy,
+                use_video_proxy=self.proxy.twitter_use_video_proxy,
+                proxy_url=proxy_addr,
+            ))
+
+        if not parsers:
+            raise ValueError(
+                "至少需要启用一个视频解析器。"
+                "请检查配置中的 parsers 设置。"
+            )
+
+        return parsers
+
+    # ── 静态辅助 ────────────────────────────────────────
+
     @staticmethod
     def _parse_positive_int(value, default: int) -> int:
-        """将配置值解析为正整数，非法值回退为默认值。"""
         try:
             return max(1, int(value))
         except (TypeError, ValueError):
@@ -306,7 +501,6 @@ class ConfigManager:
 
     @staticmethod
     def _parse_non_negative_float(value, default: float) -> float:
-        """将配置值解析为非负浮点数，非法值回退为默认值。"""
         try:
             return max(0.0, float(value))
         except (TypeError, ValueError):
@@ -314,7 +508,6 @@ class ConfigManager:
 
     @staticmethod
     def _parse_non_negative_int(value, default: int) -> int:
-        """将配置值解析为非负整数，非法值回退为默认值。"""
         try:
             return max(0, int(value))
         except (TypeError, ValueError):
@@ -322,7 +515,6 @@ class ConfigManager:
 
     @staticmethod
     def _normalize_id_list(values) -> List[str]:
-        """将管理员或白名单配置规范化为字符串 ID 集合。"""
         if not isinstance(values, list):
             return []
         normalized: List[str] = []
@@ -336,78 +528,3 @@ class ConfigManager:
             seen.add(value_str)
             normalized.append(value_str)
         return normalized
-
-    def _effective_hot_comment_count(self, enabled: bool) -> int:
-        """根据开关状态返回实际生效的热评条数。"""
-        if not self.enable_text_metadata:
-            return 0
-        if not enabled:
-            return 0
-        return self.hot_comment_count
-
-    def create_parsers(self) -> List:
-        """创建解析器列表
-
-        Returns:
-            解析器列表
-
-        Raises:
-            ValueError: 没有启用任何解析器时
-        """
-        parsers = []
-        bilibili_hot_comment_count = self._effective_hot_comment_count(
-            self.hot_comment_bilibili
-        )
-        weibo_hot_comment_count = self._effective_hot_comment_count(
-            self.hot_comment_weibo
-        )
-        xiaohongshu_hot_comment_count = self._effective_hot_comment_count(
-            self.hot_comment_xiaohongshu
-        )
-
-        if self.enable_bilibili:
-            self.bilibili_parser = BilibiliParser(
-                cookie_runtime_enabled=self.bilibili_cookie_runtime_enabled,
-                configured_cookie=self.bilibili_cookie,
-                max_quality=self.bilibili_max_quality,
-                admin_assist_enabled=self.bilibili_enable_admin_assist_on_expire,
-                admin_reply_timeout_minutes=self.bilibili_admin_reply_timeout_minutes,
-                admin_request_cooldown_minutes=self.bilibili_admin_request_cooldown_minutes,
-                credential_path=self.bilibili_cookie_runtime_file,
-                hot_comment_count=bilibili_hot_comment_count
-            )
-            parsers.append(self.bilibili_parser)
-        if self.enable_douyin:
-            parsers.append(DouyinParser())
-        if self.enable_kuaishou:
-            parsers.append(KuaishouParser())
-        if self.enable_weibo:
-            parsers.append(
-                WeiboParser(hot_comment_count=weibo_hot_comment_count)
-            )
-        if self.enable_xiaohongshu:
-            parsers.append(
-                XiaohongshuParser(
-                    hot_comment_count=xiaohongshu_hot_comment_count
-                )
-            )
-        if self.enable_xiaoheihe:
-            parsers.append(XiaoheiheParser(
-                use_video_proxy=self.xiaoheihe_use_video_proxy,
-                proxy_url=self.proxy_addr if self.proxy_addr else None
-            ))
-        if self.enable_twitter:
-            parsers.append(TwitterParser(
-                use_parse_proxy=self.twitter_use_parse_proxy,
-                use_image_proxy=self.twitter_use_image_proxy,
-                use_video_proxy=self.twitter_use_video_proxy,
-                proxy_url=self.proxy_addr if self.proxy_addr else None
-            ))
-
-        if not parsers:
-            raise ValueError(
-                "至少需要启用一个视频解析器。"
-                "请检查配置中的 parsers 设置。"
-            )
-
-        return parsers

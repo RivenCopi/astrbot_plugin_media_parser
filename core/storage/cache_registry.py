@@ -15,9 +15,11 @@ MARKER_FILE_NAME = ".astrbot_media_parser"
 
 
 def _default_registry_path() -> str:
-    """注册表文件默认存放在 core/runtime_manager/ 目录下。"""
-    core_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    registry_dir = os.path.join(core_dir, "runtime_manager")
+    """注册表文件存放在系统临时目录下，避免写入源码树。"""
+    import tempfile
+    registry_dir = os.path.join(
+        tempfile.gettempdir(), "astrbot_media_parser_runtime"
+    )
     os.makedirs(registry_dir, exist_ok=True)
     return os.path.join(registry_dir, "cache_dirs.json")
 
@@ -88,11 +90,14 @@ class CacheRegistry:
         if not cache_dir:
             return
         abs_dir = os.path.abspath(cache_dir)
+        is_new = abs_dir not in self._dirs
         if label:
             self._dirs[abs_dir] = label
-        elif abs_dir not in self._dirs:
+        elif is_new:
             self._dirs[abs_dir] = ""
         self._save()
+        if is_new:
+            logger.debug(f"注册缓存目录: {abs_dir} (label={label or '无'})")
 
     # ── 查询 ────────────────────────────────────────────
 

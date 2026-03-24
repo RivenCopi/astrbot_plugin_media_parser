@@ -151,6 +151,11 @@ async def download_dash_to_cache(
     if not cache_dir or not video_url:
         return None
 
+    logger.debug(
+        f"开始DASH下载: video={video_url[:60]}..., "
+        f"audio={'有' if audio_url else '无'}, index={index}"
+    )
+
     cache_subdir = os.path.normpath(os.path.join(cache_dir, media_id))
     os.makedirs(cache_subdir, exist_ok=True)
     stamp_subdir(cache_subdir)
@@ -235,6 +240,7 @@ async def download_dash_to_cache(
         except Exception:
             size_mb = None
 
+        logger.debug(f"DASH下载完成: {final_path}, {size_mb}MB")
         return {
             "file_path": os.path.normpath(final_path),
             "size_mb": size_mb

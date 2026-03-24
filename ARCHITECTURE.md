@@ -13,18 +13,19 @@ astrbot_plugin_media_parser/
 ├── main.py                          # 插件主入口
 ├── run_local.py                     # 本地测试工具脚本
 ├── core/
-│   ├── config_manager.py            # 配置管理器
+│   ├── config_manager.py            # 配置管理器（含 dataclass 分组：Trigger/Message/Permission/Download/Proxy/Bilibili/Relay/Admin）
 │   ├── logger.py                    # 统一日志打印器
-│   ├── types.py                     # 类型定义
+│   ├── types.py                     # 类型定义（MediaMetadata / LinkBuildMeta / BuildAllNodesResult）
 │   ├── constants.py                 # 常量定义
 │   ├── storage/                     # 存储与缓存管理模块
-│   │   ├── __init__.py              # 导出 cleanup_file/cleanup_files/cleanup_directory/CacheRegistry/stamp_subdir
+│   │   ├── __init__.py              # 导出 cleanup_file/cleanup_files/cleanup_directory/CacheRegistry/stamp_subdir/register_files_with_token_service
 │   │   ├── file_cleaner.py          # 文件清理工具
+│   │   ├── file_token.py            # 文件Token服务集成（注册已下载媒体为可回调的临时URL）
 │   │   └── cache_registry.py        # 缓存目录注册表（跨配置追踪 + 安全清理）
 │   ├── parser/                      # 解析器模块
 │   │   ├── manager.py               # 解析器管理器
 │   │   ├── router.py                # 链接路由分发器
-│   │   ├── utils.py                 # 解析器工具函数
+│   │   ├── utils.py                 # 解析器工具函数（含 extract_url_from_card_data）
 │   │   ├── runtime_manager/         # 平台运行时管理模块（Cookie/登录态）
 │   │   │   └── bilibili/
 │   │   │       └── auth.py          # B站登录态运行时（BilibiliAuthRuntime）
@@ -72,13 +73,16 @@ astrbot_plugin_media_parser/
 #### 1.3.2 核心支撑组件
 - **ConfigManager** (config_manager.py): 配置管理器
   - 解析配置文件，管理解析器启用状态与下载配置
-  - 管理触发设置（自动解析 / 关键词触发 / 回复触发）与黑白名单权限
-  - 处理各项代理配置并在运行时下发
+  - 配置按领域分组为 dataclass：`TriggerConfig`、`MessageConfig`、`PermissionConfig`、`DownloadConfig`、`ProxyConfig`、`BilibiliEnhancedConfig`、`MediaRelayConfig`、`AdminConfig`
+  - `PermissionConfig.check()` 提供权限判定（黑白名单优先级）
+  - `TriggerConfig.should_parse()` / `has_keyword()` 提供触发判定
   - 提供类型安全的解析辅助方法（`_parse_positive_int`、`_parse_non_negative_float` 等）
 - **Logger** (logger.py): 日志记录器
   - 导出全局统一的 `logger` 对象，方便各模块导入使用
 - **Types** (types.py): 类型模块
-  - 提供 `MediaMetadata` 等 TypedDict，规范系统间数据流
+  - `MediaMetadata`：解析→下载→中转全流程 TypedDict，按阶段分组字段
+  - `LinkBuildMeta`：节点构建阶段的辅助元数据
+  - `BuildAllNodesResult`：`build_all_nodes` 的 NamedTuple 返回类型
 
 #### 1.3.3 解析器模块 (parser/)
 - **ParserManager**: 解析器管理器
@@ -163,10 +167,15 @@ astrbot_plugin_media_parser/
 - **FileCleaner** (storage/file_cleaner.py): 文件清理工具
   - 清理临时文件
   - 清理缓存目录
-  - 删除文件后自动移除空父目录
+  - 删除文件后自动移除空父目录（感知 `.astrbot_media_parser` 标记文件：若目录仅剩标记则一并清除）
+  - 文件清理统一由 main.py 的 finally 块调度，node_builder/sender 不参与清理
+
+- **FileToken** (storage/file_token.py): 文件Token服务集成
+  - 将已下载的媒体文件注册到 AstrBot 文件 Token 服务
+  - 生成可回调的临时 URL，供消息平台拉取媒体
 
 - **CacheRegistry** (storage/cache_registry.py): 缓存目录注册表
-  - 持久化记录本插件使用过的所有缓存路径（JSON 文件）
+  - 持久化记录本插件使用过的所有缓存路径（JSON 文件，存于系统临时目录）
   - 在媒体子目录中放置标记文件（`.astrbot_media_parser`）标识归属
   - 安全清理：仅删除带标记的子目录，不触碰无标记内容或根目录
   - 管理员主动清理 / 插件终止时自动清理
@@ -188,15 +197,17 @@ astrbot_plugin_media_parser/
 #### 1.3.9 资源管理
 - **DownloadManager.shutdown()**: 资源清理方法
   - 关闭所有活动的aiohttp会话
-  - 取消所有正在进行的下载任务
+  - 取消所有正在进行的下载任务（含 `_batch_download_media` 内部任务）
   - 在插件terminate时调用
 - **storage 模块**: 文件与缓存清理
   - 清理临时文件（图片）
   - 清理视频文件（含 DASH 临时 .m4s 文件）
-  - 删除文件后自动移除空的缓存子目录
-  - CacheRegistry 追踪所有缓存根目录，安全清理带标记的子目录
+  - 删除文件后自动移除空的缓存子目录（标记感知：仅剩 `.astrbot_media_parser` 时视为空目录一并删除）
+  - 预下载模式下全部下载失败时，由 `DownloadManager` 主动清理空壳子目录
+  - CacheRegistry 追踪所有缓存根目录，在插件终止或管理员手动清理时安全清理带标记的子目录
 - **文件Token服务模式**: 延迟清理
   - 当 `use_file_token_service` 启用时，文件在发送后延迟 `file_token_ttl` 秒清理
+  - 延迟清理仅清理当前请求的文件，不做全局目录扫描，避免并发请求间竞态
   - 确保消息平台有足够时间通过回调 URL 拉取文件
 
 ## 二、程序执行链
@@ -371,7 +382,7 @@ downloader::manager::DownloadManager.process_metadata()
   ├─ 预下载模式 (effective_pre_download = True)
   │   ├─ 说明：effective_pre_download = pre_download_all_media && 缓存目录可用
   │   ├─ 构建媒体项列表（包含代理配置信息）
-  │   ├─ 批量下载所有媒体（并发控制）
+  │   ├─ 批量下载所有媒体（并发控制，任务注册到 _active_tasks 以支持 shutdown 取消）
   │   │   └─ downloader::router::download_media()
   │   │       ├─ 检测媒体类型（通过URL特征或前缀）
   │   │       └─ 路由到对应下载器（按 dash: → m3u8: → range: → 普通 优先级）
@@ -382,6 +393,7 @@ downloader::manager::DownloadManager.process_metadata()
   │   │           └─ video → handler::normal_video（支持代理）
   │   ├─ 处理下载结果（统计成功/失败数量）
   │   ├─ 处理video_force_download标志（全部失败时跳过视频）
+  │   ├─ 全部下载失败时主动清理空壳缓存子目录（cleanup_directory）
   │   └─ 更新元数据（file_paths, video_sizes, has_valid_media等）
   │
   └─ 直链模式 (effective_pre_download = False)
@@ -390,9 +402,11 @@ downloader::manager::DownloadManager.process_metadata()
       ├─ 检查视频可访问性
       │   └─ validator::get_video_size()（并发检查所有视频）
       │       └─ 检测403访问被拒绝
-      └─ 下载图片到临时目录
-          └─ downloader::manager::DownloadManager._download_images()
-              └─ 并发下载所有图片（支持代理配置）
+      ├─ 下载图片到临时目录
+      │   └─ downloader::manager::DownloadManager._download_images()
+      │       └─ 并发下载所有图片（支持代理配置）
+      ├─ 构建对齐的 file_paths（前置 [None]*视频数 + 图片路径，确保与 build_media_nodes 的 file_idx 一致）
+      └─ 视频超限时立即清理已下载的图片临时文件
   ↓
 返回处理后的元数据
 ```
@@ -469,23 +483,22 @@ finally 块
   ├─ 文件Token服务模式 (use_file_token_service)
   │   └─ asyncio.create_task(_delayed_cleanup(files, file_token_ttl))
   │       ├─ 等待 file_token_ttl 秒
-  │       ├─ storage::cleanup_files()
-  │       └─ CacheRegistry.cleanup_marked_in() 清理带标记子目录
+  │       └─ storage::cleanup_files()（仅清理当前请求的文件，不做全局扫描）
   └─ 普通模式
       └─ storage::cleanup_files()
           ├─ 清理临时文件（图片）
           ├─ 清理视频文件
-          └─ 自动移除空的缓存子目录（_try_remove_empty_parent）
+          └─ 自动移除空的缓存子目录（_try_remove_empty_parent，标记感知）
   ↓
 清理完成
 
 注意：
-- 打包模式下，普通媒体的视频文件在发送后立即清理
-- 大媒体单独发送，每个链接发送后立即清理其视频文件
-- 非打包模式下，每个链接发送后立即清理其视频文件
-- 所有临时文件（图片）在finally块中统一清理
+- 所有媒体文件（视频和图片）均在 main.py 的 finally 块中统一清理
+- sender 和 node_builder 不参与文件清理，仅负责发送/构建
 - DASH下载的临时.m4s文件在合并后由dash handler内部清理
 - 文件Token服务模式下，所有文件延迟 file_token_ttl 秒后再清理
+- 逐请求清理不调用 cleanup_marked_in（避免并发竞态），全局清理仅在 terminate() 和管理员手动触发时执行
+- 预下载全部失败时，DownloadManager 在返回元数据前主动 cleanup_directory 清理空壳子目录
 ```
 
 #### 2.2.8 插件终止阶段
@@ -498,7 +511,7 @@ interaction::BilibiliAdminCookieAssistManager.shutdown()
   ↓
 downloader::manager::DownloadManager.shutdown()
   ├─ 设置 _shutting_down 标志
-  ├─ 取消所有正在进行的下载任务
+  ├─ 取消所有正在进行的下载任务（含 _batch_download_media 内部任务）
   └─ 清理任务列表
   ↓
 CacheRegistry.cleanup_marked_in(cache_dir)
@@ -517,7 +530,8 @@ CacheRegistry.cleanup_marked_in(cache_dir)
   ↓
 下载阶段异常
   ├─ 单个媒体下载失败 → 记录警告，继续其他媒体
-  ├─ 全部媒体下载失败 → 标记 has_valid_media = False
+  ├─ 全部媒体下载失败 → 标记 has_valid_media = False，主动清理空壳缓存子目录
+  ├─ asyncio.CancelledError → 由 process_single 捕获，保留已回填的元数据状态
   └─ 继续构建节点（可能只有文本节点）
   ↓
 发送阶段异常
@@ -542,7 +556,7 @@ CacheRegistry.cleanup_marked_in(cache_dir)
   ↓
 媒体下载并发
   ├─ Semaphore 控制最大并发数（max_concurrent_downloads）
-  ├─ 批量下载时并发下载所有媒体项
+  ├─ 批量下载时并发下载所有媒体项（任务注册到 _active_tasks，支持 shutdown 取消）
   ├─ Range视频下载：内部使用Semaphore控制Range请求并发数
   ├─ DASH视频下载：video+audio并发下载（各子流可独立走Range或普通），完成后ffmpeg合并
   ├─ M3U8视频下载：内部使用Semaphore控制分片下载并发数
@@ -642,8 +656,9 @@ CacheRegistry.cleanup_marked_in(cache_dir)
   └─ 所有临时文件在finally块中统一清理
   ↓
 文件清理
-  ├─ 文件Token服务模式 → 延迟 file_token_ttl 秒后删除 + CacheRegistry 清理带标记子目录
-  └─ 普通模式 → 立即删除临时文件和视频文件 → 自动移除空父目录
+  ├─ 文件Token服务模式 → 延迟 file_token_ttl 秒后删除（仅当前请求的文件，不做全局扫描）
+  └─ 普通模式 → 立即删除临时文件和视频文件 → 自动移除空父目录（标记感知）
+  全局兜底：terminate() 时 CacheRegistry.cleanup_marked_in() 清理所有残留
 ```
 
 ### 4.3 代理流转
