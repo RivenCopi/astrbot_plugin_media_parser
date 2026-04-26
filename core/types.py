@@ -41,6 +41,8 @@ class MediaMetadata(TypedDict, total=False):
     proxy_url: str
 
     error: str
+    _enable_text_metadata: bool
+    _enable_rich_media: bool
 
     # ── 下载阶段（DownloadManager 回填）─────────────────
 

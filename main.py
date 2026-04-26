@@ -179,6 +179,60 @@ class VideoParserPlugin(Star):
             for key in ("title", "author", "desc", "timestamp")
         )
 
+    def _filter_links_by_output(self, links_with_parser):
+        """过滤掉当前配置下不会产生任何输出的控制器链接。"""
+        cfg = self.config_manager
+        filtered = []
+        for link, parser in links_with_parser:
+            parser_name = getattr(parser, "name", "")
+            if cfg.message.controller_has_any_output(parser_name):
+                filtered.append((link, parser))
+            elif cfg.admin.debug_mode:
+                self.logger.debug(
+                    f"控制器 {parser_name} 的文本元数据和富媒体均关闭，"
+                    f"跳过链接: {link}"
+                )
+        return filtered
+
+    def _apply_output_flags(self, metadata_list) -> None:
+        """将每条解析结果的有效输出开关写入 metadata。"""
+        for metadata in metadata_list:
+            text_enabled, rich_enabled = (
+                self.config_manager.message.output_for_metadata(metadata)
+            )
+            metadata["_enable_text_metadata"] = text_enabled
+            metadata["_enable_rich_media"] = rich_enabled
+
+    def _metadata_has_output_candidate(
+        self,
+        metadata: Dict[str, Any]
+    ) -> bool:
+        """判断 metadata 在当前输出策略下是否可能构建出节点。"""
+        if metadata.get("error"):
+            return False
+
+        text_enabled = bool(
+            metadata.get(
+                "_enable_text_metadata",
+                True
+            )
+        )
+        rich_enabled = bool(
+            metadata.get(
+                "_enable_rich_media",
+                True
+            )
+        )
+        has_media = bool(metadata.get("video_urls")) or bool(
+            metadata.get("image_urls")
+        )
+        has_text = (
+            self._has_text_metadata(metadata) or
+            bool(metadata.get("access_message")) or
+            has_media
+        )
+        return bool((rich_enabled and has_media) or (text_enabled and has_text))
+
     async def _handle_clean_cache(self, event: AstrMessageEvent):
         cache_dir = self.download_manager.cache_dir
         if not cache_dir:
@@ -245,6 +299,11 @@ class VideoParserPlugin(Star):
         links_with_parser = self.parser_manager.extract_all_links(
             parse_text
         )
+        found_direct_links = bool(links_with_parser)
+        if found_direct_links:
+            links_with_parser = self._filter_links_by_output(links_with_parser)
+            if not links_with_parser:
+                return
 
         if not links_with_parser:
             if (
@@ -252,6 +311,9 @@ class VideoParserPlugin(Star):
                 and cfg.trigger.has_keyword(original_message_text)
             ):
                 links_with_parser = self._try_extract_reply_links(event)
+                links_with_parser = self._filter_links_by_output(
+                    links_with_parser
+                )
                 if links_with_parser and cfg.admin.debug_mode:
                     self.logger.debug(
                         f"通过回复触发解析，提取到 "
@@ -287,18 +349,10 @@ class VideoParserPlugin(Star):
                 if cfg.admin.debug_mode:
                     self.logger.debug("解析后未获得任何元数据")
                 return
+            self._apply_output_flags(metadata_list)
 
             has_valid_metadata = any(
-                not metadata.get('error') and
-                (
-                    bool(metadata.get('video_urls')) or
-                    bool(metadata.get('image_urls')) or
-                    bool(metadata.get('access_message')) or
-                    (
-                        cfg.message.text_metadata and
-                        self._has_text_metadata(metadata)
-                    )
-                )
+                self._metadata_has_output_candidate(metadata)
                 for metadata in metadata_list
             )
 
@@ -326,7 +380,11 @@ class VideoParserPlugin(Star):
             # ── 元数据处理（下载）────────────────────────
 
             opening_sent = False
-            if cfg.message.rich_media:
+            should_process_rich_media = any(
+                bool(metadata.get("_enable_rich_media", True))
+                for metadata in metadata_list
+            )
+            if should_process_rich_media:
                 opening_lock = asyncio.Lock()
 
                 async def send_opening_once() -> None:
@@ -351,7 +409,13 @@ class VideoParserPlugin(Star):
                 async def process_single(
                     metadata: Dict[str, Any]
                 ) -> Dict[str, Any]:
-                    if metadata.get('error'):
+                    if (
+                        metadata.get('error') or
+                        not metadata.get(
+                            "_enable_rich_media",
+                            True
+                        )
+                    ):
                         return metadata
                     try:
                         return await self.download_manager.process_metadata(
@@ -416,8 +480,13 @@ class VideoParserPlugin(Star):
 
             # ── 文件 Token 服务注册 ──────────────────────
 
-            if cfg.message.rich_media and cfg.relay.enabled:
+            if cfg.relay.enabled:
                 for metadata in processed_metadata_list:
+                    if not metadata.get(
+                        "_enable_rich_media",
+                        True
+                    ):
+                        continue
                     await register_files_with_token_service(
                         metadata,
                         cfg.relay.callback_api_base,
@@ -431,8 +500,8 @@ class VideoParserPlugin(Star):
                 cfg.message.auto_pack,
                 cfg.download.large_video_threshold_mb,
                 cfg.download.max_video_size_mb,
-                cfg.message.text_metadata,
-                cfg.message.rich_media,
+                True,
+                True,
             )
 
             if cfg.admin.debug_mode:

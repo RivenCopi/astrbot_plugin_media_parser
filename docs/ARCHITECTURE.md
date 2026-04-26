@@ -11,7 +11,8 @@
 当前支持的平台解析器包括：
 
 - B站：普通视频、番剧、动态/opus，支持 Cookie 增强、扫码登录运行时、热评。
-- 抖音 / TikTok：同一解析器入口，TikTok 结果会归一为 `platform=tiktok`。
+- 抖音：短链、视频和图集分享页。
+- TikTok：短链、视频和图集作品页，使用独立解析器和代理开关。
 - 快手。
 - 微博，支持热评。
 - 小红书，支持热评。
@@ -71,11 +72,13 @@ astrbot_plugin_media_parser/
 
 #### 输出开关
 
-`message.text_metadata` 控制文本节点，`message.rich_media` 控制图片/视频节点。
+`parsers.<平台>` 同时控制解析器是否启用以及该平台的输出模式。
 
-- 两者都关闭：`main.py::auto_parse()` 直接跳过，不进入解析。
-- `rich_media=false`：仍可解析并发送文本，不进入下载处理、文件 Token 注册和开场语。
-- `text_metadata=false`：只发送富媒体；热评条数会被配置层归零。
+- `关闭`：不创建该平台解析器，不提取/解析该平台链接。
+- `全部发送`：发送文本元数据节点和图片/视频节点。
+- `仅文本`：解析并发送文本元数据，不进入下载处理、文件 Token 注册和富媒体节点构建。
+- `仅富媒体`：解析并发送图片/视频，不构建文本节点；热评条数会对该平台归零。
+- 所有平台均为 `关闭` 时：`main.py::auto_parse()` 直接跳过，不进入解析。
 - 开场语只在富媒体流程中触发，且只有出现可发送媒体时才发送；如果已发送开场语但最终没有节点，会补发空结果说明。
 
 #### 缓存目录
@@ -123,13 +126,15 @@ cache/runtime_manager/bilibili/cookie.json
 配置被归一为 dataclass 分组：
 
 - `TriggerConfig`：`auto_parse`、`keywords`、`reply_trigger`，提供 `should_parse()` 和 `has_keyword()`。
-- `MessageConfig`：打包、开场语、文本元数据、富媒体、热评开关。
+- `MessageConfig`：打包、开场语、各平台输出模式、热评开关。
 - `PermissionConfig`：管理员、白名单、黑名单，提供 `check()`。
 - `DownloadConfig`：大小限制、缓存目录、缓存可用性、下载并发。
 - `ProxyConfig`：全局代理、TikTok、小黑盒、Twitter 代理开关。
 - `BilibiliEnhancedConfig`：Cookie、最高画质、运行时文件、管理员协助登录。
 - `MediaRelayConfig`：文件 Token 中转开关、回调地址、TTL。
 - `AdminConfig`：清理关键词和 debug 模式。
+
+`ConfigManager` 会将 `parsers` 的输出模式归一到 `MessageConfig.parser_outputs`。使用 `关闭`、`全部发送`、`仅文本`、`仅富媒体` 四种字符串模式。缺省平台使用 `全部发送`，不同平台之间不互相继承配置。
 
 权限优先级为：管理员直接放行，其次个人白名单、个人黑名单、群组白名单、群组黑名单；均未命中时，白名单开启则拒绝，白名单关闭则放行。管理员 ID 会自动加入用户白名单。
 
@@ -148,7 +153,6 @@ cache/runtime_manager/bilibili/cookie.json
 - 使用 `asyncio.gather(..., return_exceptions=True)` 并发调用平台解析器。
 - 将解析异常转成带 `error` 的 metadata；`SkipParse` 只跳过该链接。
 - 归一 `platform`、`parser_name`、`source_url`、`video_urls`、`image_urls`、headers。
-- 将 DouyinParser 解析到的 TikTok 链接归一为 `platform=tiktok`。
 
 `BaseVideoParser` 定义 `can_parse()`、`extract_links()`、`parse()` 接口，并提供 `_add_range_prefix_to_video_urls()`，可给普通视频候选 URL 或 DASH 子流增加 `range:` 前缀。
 
@@ -275,6 +279,8 @@ ParserManager.extract_all_links()
       ├─ reply_trigger=true 且当前消息含关键词 -> 从 Reply.message_str / Reply.chain 卡片提链
       └─ 仍无链接 -> admin_cookie_assist.handle_admin_reply() -> 返回
   ↓
+按 parsers 输出模式过滤无输出链接
+  ↓
 TriggerConfig.should_parse(original_message_text)
   ├─ false -> 返回
   └─ true  -> 继续
@@ -289,11 +295,11 @@ ParserManager.parse_text(parse_text, session, links_with_parser)
   ├─ 无有效 metadata -> 返回
   └─ 有效 -> 继续
   ↓
-rich_media?
-  ├─ true  -> 并发 DownloadManager.process_metadata()
-  └─ false -> processed_metadata_list = metadata_list
+存在启用富媒体输出的 metadata?
+  ├─ 是 -> 仅对这些 metadata 并发 DownloadManager.process_metadata()
+  └─ 否 -> processed_metadata_list = metadata_list
   ↓
-media_relay.enable 且 rich_media -> register_files_with_token_service()
+media_relay.enable 且该 metadata 启用富媒体 -> register_files_with_token_service()
   ↓
 build_all_nodes()
   ↓
@@ -304,7 +310,7 @@ finally 清理本次 temp_files + video_files
   └─ relay 关闭 -> 立即清理
 ```
 
-有效 metadata 的判定条件是：至少一条结果没有 `error`，且包含视频、图片、访问提示，或在文本元数据开启时包含标题/作者/简介/发布时间。
+有效 metadata 的判定条件是：至少一条结果没有 `error`，且在当前平台输出模式下可能构建节点。富媒体输出开启时需要包含视频或图片；文本输出开启时可由标题、作者、简介、发布时间、访问提示或媒体跳过信息构建文本节点。
 
 ### 3.2 链接提取与解析链
 
@@ -451,8 +457,8 @@ file_token_urls
 节点层消费：
 
 ```text
-text_metadata -> Plain
-video_modes/image_modes + file_paths/file_token_urls/video_urls/image_urls -> Video/Image
+_enable_text_metadata -> Plain
+_enable_rich_media + video_modes/image_modes + file_paths/file_token_urls/video_urls/image_urls -> Video/Image
 ```
 
 ### 4.2 文件流转
@@ -498,7 +504,7 @@ proxy.twitter.video
 
 解析器初始化时接收代理配置：
 
-- `DouyinParser`：TikTok 解析和媒体代理。
+- `TikTokParser`：TikTok 解析和媒体代理。
 - `XiaoheiheParser`：视频代理。
 - `TwitterParser`：解析、图片、视频代理。
 
@@ -523,7 +529,7 @@ metadata.proxy_url > ConfigManager.proxy.address
 ### 5.1 并发模型
 
 - `ParserManager.parse_text()` 对去重后的链接并发解析。
-- `main.py` 在 `rich_media=true` 时对每条 metadata 创建下载处理任务，并用 `asyncio.as_completed()` 按完成顺序处理开场语触发。
+- `main.py` 在至少一条 metadata 启用富媒体输出时创建下载处理任务，并用 `asyncio.as_completed()` 按完成顺序处理开场语触发。
 - `DownloadManager` 使用实例级 `_download_semaphore` 限制所有本地媒体下载总并发。
 - Range 下载内部使用分片级 semaphore。
 - DASH 音视频子流并发下载。

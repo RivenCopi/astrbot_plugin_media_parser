@@ -10,6 +10,17 @@ from ..downloader.utils import strip_media_prefixes
 from ..types import BuildAllNodesResult, LinkBuildMeta
 
 
+def _resolve_output_flag(
+    metadata: Dict[str, Any],
+    key: str,
+    default: bool
+) -> bool:
+    value = metadata.get(key)
+    if value is None:
+        return bool(default)
+    return bool(value)
+
+
 def _append_media_skip_summary(text_parts: List[str], metadata: Dict[str, Any]) -> None:
     """将媒体跳过统计和逐项原因追加到文本节点。"""
     video_reasons = metadata.get('video_skip_reasons', []) or []
@@ -372,9 +383,27 @@ def build_nodes_for_link(
         节点列表（Plain、Image、Video对象）
     """
     nodes = []
+    effective_text_metadata = _resolve_output_flag(
+        metadata,
+        "_enable_text_metadata",
+        enable_text_metadata,
+    )
+    effective_rich_media = _resolve_output_flag(
+        metadata,
+        "_enable_rich_media",
+        enable_rich_media,
+    )
 
-    media_nodes = build_media_nodes(metadata, use_local_files, enable_rich_media)
-    text_node = build_text_node(metadata, max_video_size_mb, enable_text_metadata)
+    media_nodes = build_media_nodes(
+        metadata,
+        use_local_files,
+        effective_rich_media,
+    )
+    text_node = build_text_node(
+        metadata,
+        max_video_size_mb,
+        effective_text_metadata,
+    )
     if text_node:
         nodes.append(text_node)
     nodes.extend(media_nodes)

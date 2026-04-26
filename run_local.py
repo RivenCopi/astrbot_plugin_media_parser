@@ -23,6 +23,7 @@ try:
     from core.parser.platform import (
         BilibiliParser,
         DouyinParser,
+        TikTokParser,
         KuaishouParser,
         WeiboParser,
         XiaohongshuParser,
@@ -465,7 +466,7 @@ async def main(
     """
     print("=" * 80)
     print("媒体链接解析测试工具（简化版）")
-    print("支持的平台: B站、抖音 / TikTok、快手、小红书、Twitter/X、微博、小黑盒")
+    print("支持的平台: B站、抖音、TikTok、快手、小红书、Twitter/X、微博、小黑盒")
     print("输入 'q' 退出程序")
     print("=" * 80)
     
@@ -496,8 +497,9 @@ async def main(
             credential_path=bilibili_cookie_runtime_file,
             local_debug_mode=cache_dir_available
         ),
-        DouyinParser(
-            use_tiktok_proxy=use_proxy,
+        DouyinParser(),
+        TikTokParser(
+            use_proxy=use_proxy,
             proxy_url=proxy_url if use_proxy else None,
         ),
         KuaishouParser(),

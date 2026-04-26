@@ -137,7 +137,7 @@ HEAD 展开，失败再 GET 展开
 
 ## 四、TikTok
 
-TikTok 与抖音共享解析入口类，但取数路线完全不同。TikTok 作品页的数据主要在页面 rehydration 脚本里，而普通 HTTP 客户端容易拿到防护页或不完整页面。
+TikTok 使用独立解析器模块，取数路线与抖音完全不同。TikTok 作品页的数据主要在页面 rehydration 脚本里，而普通 HTTP 客户端容易拿到防护页或不完整页面。
 
 ```text
 tiktok.com / vm.tiktok.com / vt.tiktok.com

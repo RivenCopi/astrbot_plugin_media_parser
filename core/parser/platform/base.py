@@ -69,7 +69,7 @@ class BaseVideoParser(ABC):
             - video_headers: dict，视频下载的完整请求头字典（必需）
             - video_force_download: bool，是否强制下载到缓存目录（可选，默认False）。True=缓存目录不可用或下载失败时跳过该视频；False=由下载决策引擎按目录能力选择 local/direct
             - video_force_downloads: List[bool]，逐视频强制写入缓存标记（可选）
-            - platform: 平台名；TikTok 等共享入口的解析器可显式返回独立平台名
+            - platform: 平台名
             - 其他平台特定字段
 
         Raises:

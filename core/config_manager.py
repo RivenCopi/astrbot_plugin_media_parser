@@ -1,7 +1,7 @@
 """配置管理模块，负责默认值处理、类型转换与配置兜底。"""
 import os
 from dataclasses import dataclass, field
-from typing import Any, List
+from typing import Any, Dict, List, Tuple
 
 from .logger import logger
 
@@ -10,6 +10,7 @@ from .downloader.utils import check_cache_dir_available
 from .parser.platform import (
     BilibiliParser,
     DouyinParser,
+    TikTokParser,
     KuaishouParser,
     WeiboParser,
     XiaohongshuParser,
@@ -27,6 +28,29 @@ BILIBILI_QUALITY_MAP = {
     "720P": 64,
     "480P": 32,
     "360P": 16,
+}
+
+PARSER_OUTPUT_KEYS = (
+    "bilibili",
+    "douyin",
+    "tiktok",
+    "kuaishou",
+    "weibo",
+    "xiaohongshu",
+    "xiaoheihe",
+    "twitter",
+)
+
+OUTPUT_MODE_DISABLED = "关闭"
+OUTPUT_MODE_ALL = "全部发送"
+OUTPUT_MODE_TEXT_ONLY = "仅文本"
+OUTPUT_MODE_RICH_ONLY = "仅富媒体"
+
+OUTPUT_MODE_FLAGS = {
+    OUTPUT_MODE_DISABLED: (False, False),
+    OUTPUT_MODE_ALL: (True, True),
+    OUTPUT_MODE_TEXT_ONLY: (True, False),
+    OUTPUT_MODE_RICH_ONLY: (False, True),
 }
 
 
@@ -91,16 +115,49 @@ class MessageConfig:
     auto_pack: bool = False
     opening_enabled: bool = True
     opening_content: str = "流媒体解析bot为您服务 ٩( 'ω' )و"
-    text_metadata: bool = True
-    rich_media: bool = True
     hot_comment_count: int = 0
     hot_comment_bilibili: bool = True
     hot_comment_weibo: bool = True
     hot_comment_xiaohongshu: bool = True
+    parser_outputs: Dict[str, str] = field(default_factory=dict)
 
     def has_any_output(self) -> bool:
-        """文本元数据或富媒体至少有一种输出开启。"""
-        return bool(self.text_metadata or self.rich_media)
+        """至少有一个解析器会发送文本元数据或富媒体。"""
+        return any(
+            any(OUTPUT_MODE_FLAGS.get(mode, (False, False)))
+            for mode in self.parser_outputs.values()
+        )
+
+    def _flags_for_mode(self, mode: str) -> Tuple[bool, bool]:
+        return OUTPUT_MODE_FLAGS.get(mode, OUTPUT_MODE_FLAGS[OUTPUT_MODE_ALL])
+
+    def output_for_controller(self, controller: Any) -> Tuple[bool, bool]:
+        """返回指定解析器的文本/富媒体发送开关。"""
+        key = str(controller or "").strip()
+        mode = self.parser_outputs.get(key, OUTPUT_MODE_ALL)
+        return self._flags_for_mode(mode)
+
+    def controller_has_any_output(self, controller: Any) -> bool:
+        """指定解析器是否至少会发送一种输出。"""
+        return any(self.output_for_controller(controller))
+
+    def output_for_metadata(
+        self,
+        metadata: Dict[str, Any]
+    ) -> Tuple[bool, bool]:
+        """按 metadata 的平台名或解析器名返回有效输出开关。"""
+        keys = [
+            str(metadata.get("platform") or "").strip(),
+            str(metadata.get("parser_name") or "").strip(),
+        ]
+        seen = set()
+        for key in keys:
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            if key in self.parser_outputs:
+                return self._flags_for_mode(self.parser_outputs[key])
+        return OUTPUT_MODE_FLAGS[OUTPUT_MODE_ALL]
 
 
 @dataclass
@@ -189,17 +246,16 @@ class ConfigManager:
 
     """配置读取门面，向业务层提供类型安全的配置访问。"""
     def __init__(self, config: dict):
-        self._config = config
         self.bilibili_parser = None
-        self._parse_config()
+        self._parse_config(config)
 
     # ── 内部解析 ────────────────────────────────────────
 
-    def _parse_config(self):
+    def _parse_config(self, config: dict):
         """解析原始 dict，填充各领域配置分组。"""
 
         # --- trigger ---
-        trigger_raw = self._config.get("trigger", {})
+        trigger_raw = config.get("trigger", {})
         self.trigger = TriggerConfig(
             auto_parse=trigger_raw.get("auto_parse", True),
             keywords=trigger_raw.get("keywords", ["视频解析", "解析视频"]),
@@ -215,19 +271,36 @@ class ConfigManager:
                 "回复触发也已禁用，解析功能将完全不可用"
             )
 
+        # --- parsers/output modes ---
+        parsers_raw = config.get("parsers", {})
+        self.parser_outputs = self._parse_parser_outputs(parsers_raw)
+        self._enable_bilibili = self._parser_enabled("bilibili")
+        self._enable_douyin = self._parser_enabled("douyin")
+        self._enable_tiktok = self._parser_enabled("tiktok")
+        self._enable_kuaishou = self._parser_enabled("kuaishou")
+        self._enable_weibo = self._parser_enabled("weibo")
+        self._enable_xiaohongshu = self._parser_enabled("xiaohongshu")
+        self._enable_xiaoheihe = self._parser_enabled("xiaoheihe")
+        self._enable_twitter = self._parser_enabled("twitter")
+
         # --- message ---
-        message_raw = self._config.get("message", {})
+        message_raw = config.get("message", {})
         opening = message_raw.get("opening", {})
         hot_comments = message_raw.get("hot_comments", {})
         if not isinstance(hot_comments, dict):
             hot_comments = {}
 
-        text_metadata_enabled = message_raw.get("text_metadata", True)
-        rich_media_enabled = message_raw.get("rich_media", True)
         hot_count = self._parse_non_negative_int(
             hot_comments.get("count", 0), 0
         )
-        if not text_metadata_enabled:
+        any_text_output_enabled = any(
+            flags[0]
+            for flags in (
+                OUTPUT_MODE_FLAGS.get(mode, (False, False))
+                for mode in self.parser_outputs.values()
+            )
+        )
+        if not any_text_output_enabled:
             hot_count = 0
 
         self.message = MessageConfig(
@@ -236,22 +309,21 @@ class ConfigManager:
             opening_content=opening.get(
                 "content", "流媒体解析bot为您服务 ٩( 'ω' )و"
             ),
-            text_metadata=text_metadata_enabled,
-            rich_media=rich_media_enabled,
             hot_comment_count=hot_count,
             hot_comment_bilibili=bool(hot_comments.get("bilibili", True)),
             hot_comment_weibo=bool(hot_comments.get("weibo", True)),
             hot_comment_xiaohongshu=bool(
                 hot_comments.get("xiaohongshu", True)
             ),
+            parser_outputs=self.parser_outputs,
         )
         if not self.message.has_any_output():
             logger.warning(
-                "文本元数据与富媒体输出均已关闭，插件将不会触发解析。"
+                "所有解析器输出均已关闭，插件将不会触发解析。"
             )
 
         # --- permissions ---
-        permissions_raw = self._config.get("permissions", {})
+        permissions_raw = config.get("permissions", {})
         whitelist = permissions_raw.get("whitelist", {})
         blacklist = permissions_raw.get("blacklist", {})
         admin_id = str(permissions_raw.get("admin_id", "") or "").strip()
@@ -276,7 +348,7 @@ class ConfigManager:
         )
 
         # --- download ---
-        download_raw = self._config.get("download", {})
+        download_raw = config.get("download", {})
 
         max_video_size_mb = self._parse_non_negative_float(
             download_raw.get("max_video_size_mb", 1000.0), 1000.0
@@ -312,7 +384,7 @@ class ConfigManager:
         )
 
         # --- media_relay ---
-        relay_raw = self._config.get("media_relay", {})
+        relay_raw = config.get("media_relay", {})
         self.relay = MediaRelayConfig(
             enabled=relay_raw.get("enable", False),
             callback_api_base=str(
@@ -340,7 +412,7 @@ class ConfigManager:
         )
 
         # --- bilibili_enhanced ---
-        bili = self._config.get("bilibili_enhanced", {})
+        bili = config.get("bilibili_enhanced", {})
         if not isinstance(bili, dict):
             bili = {}
 
@@ -404,18 +476,8 @@ class ConfigManager:
             admin_request_cooldown_minutes=admin_request_cooldown,
         )
 
-        # --- parsers ---
-        parsers_raw = self._config.get("parsers", {})
-        self._enable_bilibili = parsers_raw.get("bilibili", True)
-        self._enable_douyin = parsers_raw.get("douyin", True)
-        self._enable_kuaishou = parsers_raw.get("kuaishou", True)
-        self._enable_weibo = parsers_raw.get("weibo", True)
-        self._enable_xiaohongshu = parsers_raw.get("xiaohongshu", True)
-        self._enable_xiaoheihe = parsers_raw.get("xiaoheihe", True)
-        self._enable_twitter = parsers_raw.get("twitter", True)
-
         # --- proxy ---
-        proxy_raw = self._config.get("proxy", {})
+        proxy_raw = config.get("proxy", {})
         twitter_proxy = proxy_raw.get("twitter", {})
         self.proxy = ProxyConfig(
             address=proxy_raw.get("address", ""),
@@ -427,7 +489,7 @@ class ConfigManager:
         )
 
         # --- admin ---
-        admin_raw = self._config.get("admin", {})
+        admin_raw = config.get("admin", {})
         self.admin = AdminConfig(
             clean_cache_keyword=str(
                 admin_raw.get("clean_cache_keyword", "清理媒体") or "清理媒体"
@@ -441,8 +503,21 @@ class ConfigManager:
 
     # ── 工厂方法 ────────────────────────────────────────
 
-    def _effective_hot_comment_count(self, enabled: bool) -> int:
-        if not self.message.text_metadata:
+    def _parser_enabled(self, parser_name: str) -> bool:
+        return any(
+            OUTPUT_MODE_FLAGS.get(
+                self.parser_outputs.get(parser_name, OUTPUT_MODE_ALL),
+                OUTPUT_MODE_FLAGS[OUTPUT_MODE_ALL],
+            )
+        )
+
+    def _effective_hot_comment_count(
+        self,
+        enabled: bool,
+        controller: str
+    ) -> int:
+        text_enabled, _ = self.message.output_for_controller(controller)
+        if not text_enabled:
             return 0
         if not enabled:
             return 0
@@ -456,13 +531,16 @@ class ConfigManager:
         """
         parsers = []
         bili_hc = self._effective_hot_comment_count(
-            self.message.hot_comment_bilibili
+            self.message.hot_comment_bilibili,
+            "bilibili",
         )
         weibo_hc = self._effective_hot_comment_count(
-            self.message.hot_comment_weibo
+            self.message.hot_comment_weibo,
+            "weibo",
         )
         xhs_hc = self._effective_hot_comment_count(
-            self.message.hot_comment_xiaohongshu
+            self.message.hot_comment_xiaohongshu,
+            "xiaohongshu",
         )
         proxy_addr = self.proxy.address or None
 
@@ -479,8 +557,10 @@ class ConfigManager:
             )
             parsers.append(self.bilibili_parser)
         if self._enable_douyin:
-            parsers.append(DouyinParser(
-                use_tiktok_proxy=self.proxy.tiktok_use_proxy,
+            parsers.append(DouyinParser())
+        if self._enable_tiktok:
+            parsers.append(TikTokParser(
+                use_proxy=self.proxy.tiktok_use_proxy,
                 proxy_url=proxy_addr,
             ))
         if self._enable_kuaishou:
@@ -511,6 +591,21 @@ class ConfigManager:
         return parsers
 
     # ── 静态辅助 ────────────────────────────────────────
+
+    @staticmethod
+    def _parse_parser_outputs(values) -> Dict[str, str]:
+        if not isinstance(values, dict):
+            values = {}
+
+        normalized: Dict[str, str] = {}
+        valid_modes = set(OUTPUT_MODE_FLAGS)
+        for key in PARSER_OUTPUT_KEYS:
+            raw_mode = values.get(key, OUTPUT_MODE_ALL)
+            mode = str(raw_mode or OUTPUT_MODE_ALL).strip()
+            if mode not in valid_modes:
+                mode = OUTPUT_MODE_ALL
+            normalized[key] = mode
+        return normalized
 
     @staticmethod
     def _parse_positive_int(value, default: int) -> int:

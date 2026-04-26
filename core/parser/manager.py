@@ -1,7 +1,6 @@
 """解析管理器，维护解析器列表并按链接匹配。"""
 import asyncio
 from typing import List, Dict, Any, Optional, Tuple
-from urllib.parse import urlparse
 
 import aiohttp
 
@@ -30,31 +29,12 @@ class ParserManager:
         self.link_router = LinkRouter(parsers)
 
     @staticmethod
-    def _hostname_matches(url: str, suffixes: Tuple[str, ...]) -> bool:
-        """判断 URL hostname 是否匹配任一后缀。"""
-        if not url:
-            return False
-        try:
-            host = (urlparse(url).hostname or "").lower().strip(".")
-        except Exception:
-            return False
-        return any(host == suffix or host.endswith(f".{suffix}") for suffix in suffixes)
-
     def _resolve_platform_name(
-        self,
-        url: str,
         parser: BaseVideoParser,
         metadata: Optional[Dict[str, Any]] = None
     ) -> str:
-        """按链接和解析结果归一平台名。"""
+        """按解析结果归一平台名。"""
         explicit = (metadata or {}).get("platform")
-        if explicit == "tiktok":
-            return "tiktok"
-        if parser.name == "douyin" and self._hostname_matches(
-            url,
-            ("tiktok.com", "vm.tiktok.com", "vt.tiktok.com")
-        ):
-            return "tiktok"
         return explicit or parser.name
 
     def _normalize_metadata(
@@ -64,7 +44,7 @@ class ParserManager:
         metadata: Dict[str, Any]
     ) -> Dict[str, Any]:
         """补齐解析结果的统一字段。"""
-        platform = self._resolve_platform_name(url, parser, metadata)
+        platform = self._resolve_platform_name(parser, metadata)
         metadata["platform"] = platform
         metadata.setdefault("parser_name", parser.name)
         metadata.setdefault("source_url", url)
@@ -141,7 +121,7 @@ class ParserManager:
                     logger.debug(f"跳过解析: {url}, 原因: {result}")
                     continue
                 logger.error(f"解析URL失败: {url}, 错误: {result}")
-                platform = self._resolve_platform_name(url, parser)
+                platform = self._resolve_platform_name(parser)
                 metadata_list.append({
                     'url': url,
                     'source_url': url,

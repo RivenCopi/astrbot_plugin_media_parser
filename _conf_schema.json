@@ -1,42 +1,96 @@
 {
     "parsers": {
-        "description": "解析器开关",
+        "description": "解析器与输出模式",
         "type": "object",
+        "hint": "关闭=不解析该平台；仅文本=只发送标题/作者/简介等文本；仅富媒体=只发送图片/视频",
         "items": {
             "bilibili": {
                 "description": "B站",
-                "type": "bool",
-                "default": true
+                "type": "string",
+                "options": [
+                    "关闭",
+                    "全部发送",
+                    "仅文本",
+                    "仅富媒体"
+                ],
+                "default": "全部发送"
             },
             "douyin": {
-                "description": "抖音 / TikTok",
-                "type": "bool",
-                "default": true
+                "description": "抖音",
+                "type": "string",
+                "options": [
+                    "关闭",
+                    "全部发送",
+                    "仅文本",
+                    "仅富媒体"
+                ],
+                "default": "全部发送"
+            },
+            "tiktok": {
+                "description": "TikTok",
+                "type": "string",
+                "options": [
+                    "关闭",
+                    "全部发送",
+                    "仅文本",
+                    "仅富媒体"
+                ],
+                "default": "全部发送"
             },
             "kuaishou": {
                 "description": "快手",
-                "type": "bool",
-                "default": true
+                "type": "string",
+                "options": [
+                    "关闭",
+                    "全部发送",
+                    "仅文本",
+                    "仅富媒体"
+                ],
+                "default": "全部发送"
             },
             "weibo": {
                 "description": "微博",
-                "type": "bool",
-                "default": true
+                "type": "string",
+                "options": [
+                    "关闭",
+                    "全部发送",
+                    "仅文本",
+                    "仅富媒体"
+                ],
+                "default": "全部发送"
             },
             "xiaohongshu": {
                 "description": "小红书",
-                "type": "bool",
-                "default": true
+                "type": "string",
+                "options": [
+                    "关闭",
+                    "全部发送",
+                    "仅文本",
+                    "仅富媒体"
+                ],
+                "default": "全部发送"
             },
             "xiaoheihe": {
                 "description": "小黑盒",
-                "type": "bool",
-                "default": true
+                "type": "string",
+                "options": [
+                    "关闭",
+                    "全部发送",
+                    "仅文本",
+                    "仅富媒体"
+                ],
+                "default": "全部发送"
             },
             "twitter": {
                 "description": "Twitter/X",
-                "type": "bool",
-                "default": true
+                "type": "string",
+                "options": [
+                    "关闭",
+                    "全部发送",
+                    "仅文本",
+                    "仅富媒体"
+                ],
+                "default": "全部发送"
             }
         }
     },
@@ -92,22 +146,10 @@
                     }
                 }
             },
-            "text_metadata": {
-                "description": "发送文本元数据",
-                "type": "bool",
-                "hint": "发送标题、作者、简介、媒体跳过原因等文本信息",
-                "default": true
-            },
-            "rich_media": {
-                "description": "发送图片/视频",
-                "type": "bool",
-                "hint": "关闭后只发送文本元数据；若文本元数据也关闭，则不会触发解析",
-                "default": true
-            },
             "hot_comments": {
                 "description": "热评设置",
                 "type": "object",
-                "hint": "需启用文本元数据",
+                "hint": "仅对输出模式包含文本的支持平台生效",
                 "items": {
                     "count": {
                         "description": "热评条数",
