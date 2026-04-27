@@ -145,13 +145,26 @@ class TwitterParser(BaseVideoParser):
         for photo in media.get('photos') or []:
             if isinstance(photo, dict) and photo.get('url'):
                 media_urls['images'].append(photo.get('url'))
+        gif_video_indices = []
         for video in media.get('videos') or []:
             if isinstance(video, dict) and video.get('url'):
+                url = video.get('url', '')
+                # Twitter 将 GIF 转码为 MP4 存放在 tweet_video 路径下，
+                # FxTwitter 却不一定标注 type='gif'（有时仍标为 'video'），
+                # 因此对 URL 包含 tweet_video 的视频也视为 GIF 动画。
+                is_gif = (
+                    video.get('type') == 'gif'
+                    or 'tweet_video' in url
+                )
+                if is_gif:
+                    gif_video_indices.append(len(media_urls['videos']))
                 media_urls['videos'].append({
-                    'url': video.get('url', ''),
+                    'url': url,
                     'thumbnail': video.get('thumbnail_url', ''),
                     'duration': video.get('duration', 0)
                 })
+        if gif_video_indices:
+            media_urls['gif_video_indices'] = gif_video_indices
         return media_urls
 
     @staticmethod
@@ -377,6 +390,7 @@ class TwitterParser(BaseVideoParser):
 
         images: List[str] = []
         videos: List[Dict[str, Any]] = []
+        gif_video_indices: List[int] = []
         media_items = ((legacy.get("extended_entities") or {}).get("media") or [])
         for media in media_items:
             if not isinstance(media, dict):
@@ -386,12 +400,17 @@ class TwitterParser(BaseVideoParser):
                 img_url = self._build_img_url(media)
                 if img_url:
                     images.append(img_url)
-            elif media_type in ("video", "animated_gif"):
+            elif media_type == "animated_gif":
+                video_url = self._best_video_variant(media)
+                if video_url:
+                    gif_video_indices.append(len(videos))
+                    videos.append({"url": video_url})
+            elif media_type == "video":
                 video_url = self._best_video_variant(media)
                 if video_url:
                     videos.append({"url": video_url})
 
-        return {
+        result: Dict[str, Any] = {
             "images": images,
             "videos": videos,
             "title": f"{author} 的推文" if author else "Twitter 推文",
@@ -405,6 +424,9 @@ class TwitterParser(BaseVideoParser):
                 quote.get("timestamp", "")
             ),
         }
+        if gif_video_indices:
+            result["gif_video_indices"] = gif_video_indices
+        return result
 
     def _graphql_author(self, tweet: Dict[str, Any]) -> str:
         """从 GraphQL tweet 节点提取作者。"""
@@ -615,8 +637,9 @@ class TwitterParser(BaseVideoParser):
             
             video_urls = []
             image_urls = []
+            gif_video_indices: set = set(media_info.get('gif_video_indices') or [])
             
-            for video_info in videos:
+            for i, video_info in enumerate(videos):
                 video_url = video_info.get('url')
                 if video_url:
                     video_urls.append(video_url)
@@ -646,10 +669,15 @@ class TwitterParser(BaseVideoParser):
                 "proxy_url": self.proxy_url if (self.use_image_proxy or self.use_video_proxy) else None,
             }
             
+            video_urls_nested = self._add_range_prefix_to_video_urls([[url] for url in video_urls])
+            
+            if gif_video_indices:
+                metadata_base["gif_video_indices"] = list(gif_video_indices)
+            
             if has_videos and has_images:
                 result_dict = {
                     **metadata_base,
-                    "video_urls": self._add_range_prefix_to_video_urls([[url] for url in video_urls]),
+                    "video_urls": video_urls_nested,
                     "image_urls": [[url] for url in image_urls],
                     "is_twitter_video": True,
                     "video_force_download": True,
@@ -659,7 +687,7 @@ class TwitterParser(BaseVideoParser):
             elif has_videos:
                 result_dict = {
                     **metadata_base,
-                    "video_urls": self._add_range_prefix_to_video_urls([[url] for url in video_urls]),
+                    "video_urls": video_urls_nested,
                     "image_urls": [],
                     "is_twitter_video": True,
                     "video_force_download": True,

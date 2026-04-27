@@ -1,5 +1,6 @@
 """消息节点构建器，将解析结果转换为可发送消息节点。"""
 import os
+import subprocess
 from typing import Dict, Any, List, Optional, Union
 
 from ..logger import logger
@@ -8,6 +9,84 @@ from astrbot.api.message_components import Plain, Image, Video
 
 from ..downloader.utils import strip_media_prefixes
 from ..types import BuildAllNodesResult, LinkBuildMeta
+
+
+_GIF_MAX_SIZE_MB = 20.0  # 单张 GIF 允许的最大字节数
+
+# ========== MP4→GIF 转码常量 ==========
+_GIF_FPS = 10           # GIF 帧率
+_GIF_MAX_WIDTH = 320    # GIF 最大宽度，超出则等比缩放
+_GIF_FLAGS_QUALITY = (
+    "fps={fps},scale={w}:-1:flags=lanczos,split[s0][s1];"
+    "[s0]palettegen=max_colors=128:stats_mode=diff[s0];"
+    "[s1][s0]paletteuse=dither=bayer:bayer_scale=2"
+)
+
+
+def _convert_mp4_to_gif(
+    mp4_path: str,
+    gif_path: str,
+    fps: int = _GIF_FPS,
+    max_size_mb: float = _GIF_MAX_SIZE_MB,
+) -> bool:
+    """用 ffmpeg 将 mp4 转码为 GIF 动图。
+
+    使用双通道调色板（palettegen + paletteuse）保证画质，
+    同时通过 FPS/分辨率限制控制输出文件大小。若目标 GIF
+    生成后仍超过 ``max_size_mb``，则自动降档重试
+    （先降 FPS，再降分辨率），最终仍不满足则返回 False。
+
+    Args:
+        mp4_path: 源 mp4 路径
+        gif_path: 目标 gif 路径
+        fps: 帧率（默认 10）
+        max_size_mb: 最大文件大小 (MB)，超过则降档重试
+    """
+    import re as _re
+
+    fps = int(fps)
+    max_size_mb = float(max_size_mb)
+    max_width = _GIF_MAX_WIDTH
+    passed = False
+
+    for attempt in range(3):
+        vf = _GIF_FLAGS_QUALITY.format(fps=fps, w=max_width)
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", mp4_path,
+            "-vf", vf,
+            "-loop", "0",
+            gif_path,
+        ]
+        try:
+            subprocess.run(cmd, check=True, capture_output=True, timeout=60)
+            size_mb = os.path.getsize(gif_path) / (1024 * 1024)
+            if size_mb <= max_size_mb:
+                passed = True
+                break
+            logger.warning(
+                f"GIF 转码后体积 {size_mb:.1f}MB > {max_size_mb}MB，"
+                f"降档重试 (attempt={attempt})"
+            )
+        except subprocess.TimeoutExpired:
+            logger.warning(f"GIF 转码超时 (attempt={attempt})")
+        except subprocess.CalledProcessError as e:
+            logger.warning(
+                f"GIF 转码子进程失败 (attempt={attempt}): {e.stderr.decode(errors='replace') if e.stderr else e}"
+            )
+        except Exception as e:
+            logger.error(f"GIF 转码异常 (attempt={attempt}): {e}", exc_info=True)
+
+        # 降档策略：先降 FPS，再降分辨率
+        if attempt == 0:
+            fps = max(5, fps - 3)
+        elif attempt == 1:
+            max_width = 240
+            fps = _GIF_FPS
+
+    if not passed:
+        logger.warning("GIF 转码降档后仍不符合体积要求，将发送原始 mp4 作为视频")
+    return passed
 
 
 def _resolve_output_flag(
@@ -213,7 +292,9 @@ def build_text_node(metadata: Dict[str, Any], max_video_size_mb: float = 0.0, en
 def build_media_nodes(
     metadata: Dict[str, Any],
     use_local_files: bool = False,
-    enable_rich_media: bool = True
+    enable_rich_media: bool = True,
+    gif_fps: int = _GIF_FPS,
+    gif_max_size_mb: float = _GIF_MAX_SIZE_MB,
 ) -> List[Union[Image, Video]]:
     """构建媒体节点
 
@@ -221,6 +302,8 @@ def build_media_nodes(
         metadata: 元数据字典
         use_local_files: 是否使用本地文件
         enable_rich_media: 是否构建富媒体节点
+        gif_fps: GIF 转码帧率（来自 twitter_gif 配置）
+        gif_max_size_mb: GIF 最大体积 (MB)（来自 twitter_gif 配置）
 
     Returns:
         媒体节点列表（Image或Video节点）
@@ -264,12 +347,16 @@ def build_media_nodes(
         logger.debug(f"无媒体内容，跳过节点构建: {url}")
         return nodes
     
+    gif_video_indices = set(metadata.get('gif_video_indices') or [])
     file_idx = 0
     
     for idx, url_list in enumerate(video_urls):
         mode = video_modes[idx] if idx < len(video_modes) else (
             'local' if use_local_files else 'direct'
         )
+        is_gif = idx in gif_video_indices
+        media_label = 'gif' if is_gif else 'video'
+        
         if mode == 'skip':
             file_idx += 1
             continue
@@ -277,8 +364,8 @@ def build_media_nodes(
             file_idx += 1
             continue
         
-        video_url = url_list[0] if url_list else None
-        if not video_url:
+        media_url = url_list[0] if url_list else None
+        if not media_url:
             file_idx += 1
             continue
         
@@ -287,29 +374,78 @@ def build_media_nodes(
             if use_fts and file_idx < len(file_token_urls)
             else None
         )
-        if token_url:
-            try:
-                nodes.append(Video.fromURL(token_url))
-                file_idx += 1
-                continue
-            except Exception as e:
-                logger.warning(f"使用Token URL构建视频节点失败: {token_url}, 错误: {e}")
         
-        if mode == 'local' and file_idx < len(file_paths) and file_paths[file_idx] and os.path.exists(file_paths[file_idx]):
-            try:
-                nodes.append(Video.fromFileSystem(file_paths[file_idx]))
-            except Exception as e:
-                logger.warning(f"构建视频节点失败: {file_paths[file_idx]}, 错误: {e}")
-                _mark_media_failure(metadata, 'video', idx, f"构建本地视频节点失败: {e}")
-        elif mode == 'local':
-            _mark_media_failure(metadata, 'video', idx, "本地视频文件不存在或不可访问")
+        if is_gif:
+            # GIF 视频：用 Image 组件发送，确保在 QQ 等平台显示为动图
+            if token_url:
+                try:
+                    nodes.append(Image.fromURL(token_url))
+                    file_idx += 1
+                    continue
+                except Exception as e:
+                    logger.warning(f"使用Token URL构建GIF图片节点失败: {token_url}, 错误: {e}")
+            
+            if mode == 'local' and file_idx < len(file_paths) and file_paths[file_idx] and os.path.exists(file_paths[file_idx]):
+                mp4_file = file_paths[file_idx]
+                gif_file = os.path.splitext(mp4_file)[0] + '.gif'
+                gif_ready = False
+                if mp4_file.endswith('.mp4'):
+                    if os.path.exists(gif_file):
+                        gif_ready = True
+                    else:
+                        logger.info(f"开始将 GIF mp4 转码为 GIF 动图: {mp4_file}")
+                        gif_ready = _convert_mp4_to_gif(
+                            mp4_file, gif_file,
+                            fps=gif_fps,
+                            max_size_mb=gif_max_size_mb,
+                        )
+                if gif_ready:
+                    try:
+                        nodes.append(Image.fromFileSystem(gif_file))
+                    except Exception as e:
+                        logger.warning(f"构建GIF图片节点失败: {gif_file}, 错误: {e}")
+                        _mark_media_failure(metadata, media_label, idx, f"构建本地GIF图片节点失败: {e}")
+                else:
+                    _mark_media_failure(metadata, media_label, idx, "本地GIF mp4转码失败，将发送原始视频")
+                    # 降级为普通视频节点
+                    try:
+                        nodes.append(Video.fromFileSystem(mp4_file))
+                    except Exception as e:
+                        logger.warning(f"构建GIF降级视频节点失败: {mp4_file}, 错误: {e}")
+            elif mode == 'local':
+                _mark_media_failure(metadata, media_label, idx, "本地GIF图片文件不存在或不可访问")
+            else:
+                actual_media_url = strip_media_prefixes(media_url)
+                try:
+                    nodes.append(Image.fromURL(actual_media_url))
+                except Exception as e:
+                    logger.warning(f"构建GIF图片节点失败: {actual_media_url}, 错误: {e}")
+                    _mark_media_failure(metadata, media_label, idx, f"构建GIF图片URL节点失败: {e}")
         else:
-            actual_video_url = strip_media_prefixes(video_url)
-            try:
-                nodes.append(Video.fromURL(actual_video_url))
-            except Exception as e:
-                logger.warning(f"构建视频节点失败: {actual_video_url}, 错误: {e}")
-                _mark_media_failure(metadata, 'video', idx, f"构建视频URL节点失败: {e}")
+            # 普通视频
+            if token_url:
+                try:
+                    nodes.append(Video.fromURL(token_url))
+                    file_idx += 1
+                    continue
+                except Exception as e:
+                    logger.warning(f"使用Token URL构建视频节点失败: {token_url}, 错误: {e}")
+            
+            if mode == 'local' and file_idx < len(file_paths) and file_paths[file_idx] and os.path.exists(file_paths[file_idx]):
+                try:
+                    nodes.append(Video.fromFileSystem(file_paths[file_idx]))
+                except Exception as e:
+                    logger.warning(f"构建视频节点失败: {file_paths[file_idx]}, 错误: {e}")
+                    _mark_media_failure(metadata, media_label, idx, f"构建本地视频节点失败: {e}")
+            elif mode == 'local':
+                _mark_media_failure(metadata, media_label, idx, "本地视频文件不存在或不可访问")
+            else:
+                actual_media_url = strip_media_prefixes(media_url)
+                try:
+                    nodes.append(Video.fromURL(actual_media_url))
+                except Exception as e:
+                    logger.warning(f"构建视频节点失败: {actual_media_url}, 错误: {e}")
+                    _mark_media_failure(metadata, media_label, idx, f"构建视频URL节点失败: {e}")
         
         file_idx += 1
     
@@ -368,7 +504,9 @@ def build_nodes_for_link(
     use_local_files: bool = False,
     max_video_size_mb: float = 0.0,
     enable_text_metadata: bool = True,
-    enable_rich_media: bool = True
+    enable_rich_media: bool = True,
+    gif_fps: int = _GIF_FPS,
+    gif_max_size_mb: float = _GIF_MAX_SIZE_MB,
 ) -> List[Union[Plain, Image, Video]]:
     """构建单个链接的节点列表
 
@@ -378,6 +516,8 @@ def build_nodes_for_link(
         max_video_size_mb: 最大允许的视频大小(MB)，用于显示详细的错误信息
         enable_text_metadata: 是否发送图文文本消息
         enable_rich_media: 是否发送图片/视频
+        gif_fps: GIF 转码帧率
+        gif_max_size_mb: GIF 最大体积 (MB)
 
     Returns:
         节点列表（Plain、Image、Video对象）
@@ -398,6 +538,8 @@ def build_nodes_for_link(
         metadata,
         use_local_files,
         effective_rich_media,
+        gif_fps=gif_fps,
+        gif_max_size_mb=gif_max_size_mb,
     )
     text_node = build_text_node(
         metadata,
@@ -437,7 +579,9 @@ def build_all_nodes(
     large_video_threshold_mb: float = 0.0,
     max_video_size_mb: float = 0.0,
     enable_text_metadata: bool = True,
-    enable_rich_media: bool = True
+    enable_rich_media: bool = True,
+    gif_fps: int = _GIF_FPS,
+    gif_max_size_mb: float = _GIF_MAX_SIZE_MB,
 ) -> BuildAllNodesResult:
     """构建所有链接的节点，处理消息打包逻辑
 
@@ -448,6 +592,8 @@ def build_all_nodes(
         max_video_size_mb: 最大允许的视频大小(MB)，用于显示错误信息
         enable_text_metadata: 是否发送图文文本消息
         enable_rich_media: 是否发送图片/视频
+        gif_fps: GIF 转码帧率（来自 twitter_gif 配置）
+        gif_max_size_mb: GIF 最大体积 (MB)（来自 twitter_gif 配置）
 
     Returns:
         BuildAllNodesResult 命名元组
@@ -478,9 +624,11 @@ def build_all_nodes(
         link_nodes = build_nodes_for_link(
             metadata,
             use_local_files,
-            max_video_size_mb,
-            enable_text_metadata,
-            enable_rich_media
+            gif_fps=gif_fps,
+            gif_max_size_mb=gif_max_size_mb,
+            max_video_size_mb=max_video_size_mb,
+            enable_text_metadata=enable_text_metadata,
+            enable_rich_media=enable_rich_media,
         )
         
         logger.debug(f"节点构建完成[{idx}]: {url}, 节点数量: {len(link_nodes)}")

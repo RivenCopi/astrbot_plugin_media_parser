@@ -195,12 +195,20 @@ class PermissionConfig:
 
 
 @dataclass
+class TwitterGifConfig:
+    enabled: bool = True
+    max_gif_size_mb: int = 5
+    gif_fps: int = 10
+
+
+@dataclass
 class DownloadConfig:
     max_video_size_mb: float = 1000.0
     large_video_threshold_mb: float = Config.DEFAULT_LARGE_VIDEO_THRESHOLD_MB
     cache_dir: str = ""
     cache_dir_available: bool = False
     max_concurrent_downloads: int = Config.DOWNLOAD_MANAGER_MAX_CONCURRENT
+    twitter_gif: TwitterGifConfig = field(default_factory=TwitterGifConfig)
 
 
 @dataclass
@@ -403,12 +411,27 @@ class ConfigManager:
                 "视频将尽量使用直链发送，图片和必须写入缓存的媒体会被跳过。"
             )
 
+        # --- twitter_gif ---
+        twitter_gif_raw = download_raw.get("twitter_gif", {})
+        if not isinstance(twitter_gif_raw, dict):
+            twitter_gif_raw = {}
+        twitter_gif_config = TwitterGifConfig(
+            enabled=bool(twitter_gif_raw.get("enabled", True)),
+            max_gif_size_mb=self._parse_positive_int(
+                twitter_gif_raw.get("max_gif_size_mb", 5), 5
+            ),
+            gif_fps=self._parse_positive_int(
+                twitter_gif_raw.get("gif_fps", 10), 10
+            ),
+        )
+
         self.download = DownloadConfig(
             max_video_size_mb=max_video_size_mb,
             large_video_threshold_mb=large_video_threshold_mb,
             cache_dir=cache_dir,
             cache_dir_available=cache_dir_available,
             max_concurrent_downloads=max_concurrent,
+            twitter_gif=twitter_gif_config,
         )
 
         # --- bilibili_enhanced ---

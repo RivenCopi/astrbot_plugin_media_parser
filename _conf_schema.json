@@ -203,6 +203,31 @@
                 "type": "float",
                 "hint": "超过阈值单独发送，不放入消息集合，上限100MB，0 = 不限制",
                 "default": 100.0
+            },
+            "twitter_gif": {
+                "description": "Twitter/X GIF 转码设置",
+                "type": "object",
+                "hint": "Twitter GIF 实际为 MP4，可将其转为真正的 GIF 发送",
+                "items": {
+                    "enabled": {
+                        "description": "启用 GIF 转码",
+                        "type": "bool",
+                        "default": true,
+                        "hint": "将 Twitter GIF(MP4) 转为 GIF 动图"
+                    },
+                    "max_gif_size_mb": {
+                        "description": "GIF 文件最大允许大小(MB)",
+                        "type": "int",
+                        "default": 5,
+                        "hint": "超过此大小的 MP4 不转 GIF，发送直链"
+                    },
+                    "gif_fps": {
+                        "description": "GIF 目标帧率",
+                        "type": "int",
+                        "default": 10,
+                        "hint": "降低帧率可减少 GIF 体积"
+                    }
+                }
             }
         }
     },

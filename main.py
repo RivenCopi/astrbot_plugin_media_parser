@@ -495,6 +495,10 @@ class VideoParserPlugin(Star):
 
             # ── 节点构建与发送 ───────────────────────────
 
+            twitter_gif_cfg = cfg.download.twitter_gif
+            gif_fps = twitter_gif_cfg.gif_fps if twitter_gif_cfg.enabled else 0
+            gif_max_size_mb = twitter_gif_cfg.max_gif_size_mb if twitter_gif_cfg.enabled else 0
+
             build_result = build_all_nodes(
                 processed_metadata_list,
                 cfg.message.auto_pack,
@@ -502,6 +506,8 @@ class VideoParserPlugin(Star):
                 cfg.download.max_video_size_mb,
                 True,
                 True,
+                gif_fps=gif_fps,
+                gif_max_size_mb=gif_max_size_mb,
             )
 
             if cfg.admin.debug_mode:
