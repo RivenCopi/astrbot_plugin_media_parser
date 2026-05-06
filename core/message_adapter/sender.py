@@ -37,7 +37,9 @@ class MessageSender:
         link_metadata: list,
         sender_name: str,
         sender_id: Any,
-        large_video_threshold_mb: float = 0.0
+        large_video_threshold_mb: float = 0.0,
+        max_images_per_node: int = 3,
+        max_nodes_per_forward: int = 5,
     ):
         """发送打包的结果（使用Nodes）
 
@@ -47,6 +49,8 @@ class MessageSender:
             sender_name: 发送者名称
             sender_id: 发送者ID
             large_video_threshold_mb: 大视频阈值(MB)
+            max_images_per_node: 单个Node最多包含的图片数
+            max_nodes_per_forward: 单条合并转发最多包含的Node数
         """
         normal_metadata = [
             meta for meta in link_metadata if meta.get('is_normal', True)
@@ -80,11 +84,12 @@ class MessageSender:
                             uin=sender_id,
                             content=[text]
                         ))
-                    if images:
+                    for i in range(0, len(images), max_images_per_node):
+                        chunk = images[i:i + max_images_per_node]
                         flat_nodes.append(Node(
                             name=sender_name,
                             uin=sender_id,
-                            content=images
+                            content=chunk
                         ))
                 else:
                     for node in link_nodes:
@@ -101,7 +106,9 @@ class MessageSender:
                         content=[Plain(separator)]
                     ))
             if flat_nodes:
-                await event.send(event.chain_result([Nodes(flat_nodes)]))
+                for i in range(0, len(flat_nodes), max_nodes_per_forward):
+                    chunk = flat_nodes[i:i + max_nodes_per_forward]
+                    await event.send(event.chain_result([Nodes(chunk)]))
 
         if large_media_link_nodes:
             await self.send_large_media_results(
@@ -159,13 +166,15 @@ class MessageSender:
     async def send_unpacked_results(
         self,
         event: AstrMessageEvent,
-        all_link_nodes: list
+        all_link_nodes: list,
+        max_images_per_message: int = 3,
     ):
         """发送非打包的结果（独立发送）
 
         Args:
             event: 消息事件对象
             all_link_nodes: 所有链接节点列表
+            max_images_per_message: 单条消息最多包含的图片数
         """
         separator = "-------------------------------------"
         for link_idx, link_nodes in enumerate(all_link_nodes):
@@ -181,7 +190,9 @@ class MessageSender:
                 for text in texts:
                     await event.send(event.chain_result([text]))
                 if images:
-                    await event.send(event.chain_result(images))
+                    for i in range(0, len(images), max_images_per_message):
+                        chunk = images[i:i + max_images_per_message]
+                        await event.send(event.chain_result(chunk))
             else:
                 for node in link_nodes:
                     if node is not None:

@@ -547,11 +547,14 @@ class VideoParserPlugin(Star):
                         sender_name,
                         sender_id,
                         cfg.download.large_video_threshold_mb,
+                        max_images_per_node=cfg.message.max_images_per_message,
+                        max_nodes_per_forward=cfg.message.max_nodes_per_forward,
                     )
                 else:
                     await self.message_sender.send_unpacked_results(
                         event,
                         build_result.all_link_nodes,
+                        max_images_per_message=cfg.message.max_images_per_message,
                     )
 
                 if cfg.admin.debug_mode:

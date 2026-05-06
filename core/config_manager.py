@@ -116,7 +116,9 @@ class TriggerConfig:
 
 @dataclass
 class MessageConfig:
+    max_images_per_message: int = 3
     auto_pack: bool = False
+    max_nodes_per_forward: int = 5
     opening_enabled: bool = True
     opening_content: str = "流媒体解析bot为您服务 ٩( 'ω' )و"
     hot_comment_count: int = 0
@@ -318,7 +320,13 @@ class ConfigManager:
             hot_count = 0
 
         self.message = MessageConfig(
+            max_images_per_message=self._parse_positive_int(
+                message_raw.get("max_images_per_message", 3), 3
+            ),
             auto_pack=message_raw.get("auto_pack", False),
+            max_nodes_per_forward=self._parse_positive_int(
+                message_raw.get("max_nodes_per_forward", 5), 5
+            ),
             opening_enabled=opening.get("enable", True),
             opening_content=opening.get(
                 "content", "流媒体解析bot为您服务 ٩( 'ω' )و"

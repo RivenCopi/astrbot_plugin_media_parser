@@ -146,11 +146,23 @@
         "description": "消息与展示",
         "type": "object",
         "items": {
+            "max_images_per_message": {
+                "description": "单条消息最大图片数（非打包模式）",
+                "type": "int",
+                "hint": "图片较多时自动拆分发送，避免 NapCat 断连；建议 1~5",
+                "default": 3
+            },
             "auto_pack": {
                 "description": "打包为消息集合",
                 "type": "bool",
                 "hint": "Napcat 存在兼容问题，不建议启用",
                 "default": false
+            },
+            "max_nodes_per_forward": {
+                "description": "单条合并转发最大节点数（打包模式）",
+                "type": "int",
+                "hint": "合并转发内容过多时自动拆分；建议 3~8",
+                "default": 5
             },
             "opening": {
                 "description": "开场语",
