@@ -17,7 +17,8 @@ from .parser.platform import (
     XianyuParser,
     ToutiaoParser,
     XiaoheiheParser,
-    TwitterParser
+    TwitterParser,
+    PixivParser
 )
 
 
@@ -43,6 +44,7 @@ PARSER_OUTPUT_KEYS = (
     "toutiao",
     "xiaoheihe",
     "twitter",
+    "pixiv",
 )
 
 OUTPUT_MODE_DISABLED = "关闭"
@@ -253,6 +255,15 @@ class AdminConfig:
     debug_mode: bool = False
 
 
+@dataclass
+class PixivConfig:
+    refresh_token: str = ""
+    image_proxy_host: str = "i.pixiv.re"
+    image_quality: str = "large"
+    r18_enabled: bool = False
+    r18_whitelist: List[str] = field(default_factory=list)
+
+
 # ── 配置管理器 ──────────────────────────────────────────
 
 
@@ -298,6 +309,7 @@ class ConfigManager:
         self._enable_toutiao = self._parser_enabled("toutiao")
         self._enable_xiaoheihe = self._parser_enabled("xiaoheihe")
         self._enable_twitter = self._parser_enabled("twitter")
+        self._enable_pixiv = self._parser_enabled("pixiv")
 
         # --- message ---
         message_raw = config.get("message", {})
@@ -513,6 +525,21 @@ class ConfigManager:
             admin_request_cooldown_minutes=admin_request_cooldown,
         )
 
+        # --- pixiv ---
+        pixiv_raw = config.get("pixiv", {})
+        if not isinstance(pixiv_raw, dict):
+            pixiv_raw = {}
+        r18_raw = pixiv_raw.get("r18", {})
+        if not isinstance(r18_raw, dict):
+            r18_raw = {}
+        self.pixiv = PixivConfig(
+            refresh_token=str(pixiv_raw.get("refresh_token", "") or "").strip(),
+            image_proxy_host=str(pixiv_raw.get("image_proxy_host", "i.pixiv.re") or "i.pixiv.re").strip(),
+            image_quality=str(pixiv_raw.get("image_quality", "large") or "large").strip(),
+            r18_enabled=bool(r18_raw.get("enabled", False)),
+            r18_whitelist=self._normalize_id_list(r18_raw.get("whitelist", [])),
+        )
+
         # --- proxy ---
         proxy_raw = config.get("proxy", {})
         twitter_proxy = proxy_raw.get("twitter", {})
@@ -626,6 +653,13 @@ class ConfigManager:
                 use_parse_proxy=self.proxy.twitter_use_parse_proxy,
                 use_image_proxy=self.proxy.twitter_use_image_proxy,
                 use_video_proxy=self.proxy.twitter_use_video_proxy,
+                proxy_url=proxy_addr,
+            ))
+        if self._enable_pixiv:
+            parsers.append(PixivParser(
+                refresh_token=self.pixiv.refresh_token,
+                image_proxy_host=self.pixiv.image_proxy_host,
+                image_quality=self.pixiv.image_quality,
                 proxy_url=proxy_addr,
             ))
 

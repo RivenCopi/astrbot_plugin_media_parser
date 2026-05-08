@@ -113,6 +113,17 @@
                     "仅富媒体"
                 ],
                 "default": "全部发送"
+            },
+            "pixiv": {
+                "description": "Pixiv",
+                "type": "string",
+                "options": [
+                    "关闭",
+                    "全部发送",
+                    "仅文本",
+                    "仅富媒体"
+                ],
+                "default": "全部发送"
             }
         }
     },
@@ -371,6 +382,54 @@
                         "description": "请求冷却(分钟)",
                         "type": "int",
                         "default": 1440
+                    }
+                }
+            }
+        }
+    },
+    "pixiv": {
+        "description": "Pixiv设置",
+        "type": "object",
+        "items": {
+            "refresh_token": {
+                "description": "Pixiv Refresh Token",
+                "type": "string",
+                "hint": "用于Pixiv API认证。获取方法参考 https://gist.github.com/karakoo/5e7e0b1f3cc74cbcb7fce1c778d3709e",
+                "default": ""
+            },
+            "image_proxy_host": {
+                "description": "图片反代域名",
+                "type": "string",
+                "hint": "用于替换 i.pximg.net，解决防盗链问题",
+                "default": "i.pixiv.re"
+            },
+            "image_quality": {
+                "description": "图片质量",
+                "type": "string",
+                "options": [
+                    "original",
+                    "large",
+                    "medium"
+                ],
+                "hint": "original=原图 large=大图 medium=中图，从上到下依次回退",
+                "default": "large"
+            },
+            "r18": {
+                "description": "R18设置",
+                "type": "object",
+                "hint": "控制R18内容的访问权限",
+                "items": {
+                    "enabled": {
+                        "description": "允许R18",
+                        "type": "bool",
+                        "hint": "开启后根据白名单控制R18内容访问；关闭则过滤所有R18内容",
+                        "default": false
+                    },
+                    "whitelist": {
+                        "description": "群组白名单",
+                        "type": "list",
+                        "hint": "白名单为空时R18对所有群组开放；填写群组ID后仅白名单内的群组可访问R18内容",
+                        "default": []
                     }
                 }
             }

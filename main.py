@@ -194,6 +194,41 @@ class VideoParserPlugin(Star):
                 )
         return filtered
 
+    def _filter_pixiv_r18(self, metadata_list, group_id) -> None:
+        """根据 R18 配置和白名单过滤 Pixiv R18 内容。"""
+        pixiv_cfg = self.config_manager.pixiv
+        for metadata in metadata_list:
+            if not metadata.get("is_r18"):
+                continue
+            if metadata.get("platform") != "pixiv":
+                continue
+
+            if not pixiv_cfg.r18_enabled:
+                metadata["image_urls"] = []
+                metadata["video_urls"] = []
+                metadata["desc"] = (
+                    "[R18 内容已过滤]\n"
+                    "R18 功能未开启，请联系管理员在插件配置中开启。\n\n"
+                    + (metadata.get("desc") or "")
+                )
+                logger.info(
+                    f"[pixiv] R18 内容已过滤（功能未开启）: {metadata.get('url')}"
+                )
+            elif pixiv_cfg.r18_whitelist:
+                gid = str(group_id or "").strip()
+                if gid not in pixiv_cfg.r18_whitelist:
+                    metadata["image_urls"] = []
+                    metadata["video_urls"] = []
+                    metadata["desc"] = (
+                        "[R18 内容已过滤]\n"
+                        "当前群组不在 R18 白名单中，无法查看此内容。\n\n"
+                        + (metadata.get("desc") or "")
+                    )
+                    logger.info(
+                        f"[pixiv] R18 内容已过滤（群组不在白名单）: "
+                        f"group={gid}, url={metadata.get('url')}"
+                    )
+
     def _apply_output_flags(self, metadata_list) -> None:
         """将每条解析结果的有效输出开关写入 metadata。"""
         for metadata in metadata_list:
@@ -349,6 +384,10 @@ class VideoParserPlugin(Star):
                 if cfg.admin.debug_mode:
                     self.logger.debug("解析后未获得任何元数据")
                 return
+
+            # ── Pixiv R18 过滤 ─────────────────────────
+            self._filter_pixiv_r18(metadata_list, group_id)
+
             self._apply_output_flags(metadata_list)
 
             has_valid_metadata = any(

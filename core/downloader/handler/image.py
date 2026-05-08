@@ -114,7 +114,7 @@ async def download_image_to_cache(
 
     Args:
         session: aiohttp会话
-        image_url: 图片URL
+        image_url: 图片URL或本地文件路径
         cache_dir: 缓存目录
         media_id: 媒体ID（用于生成缓存文件名）
         index: 图片索引
@@ -124,6 +124,16 @@ async def download_image_to_cache(
     Returns:
         下载结果字典，包含 file_path、size_mb、status_code；失败时保留错误原因。
     """
+    if image_url and os.path.isfile(image_url):
+        file_path = os.path.normpath(image_url)
+        size_mb = os.path.getsize(file_path) / (1024 * 1024) if os.path.exists(file_path) else None
+        return {
+            'file_path': file_path,
+            'size_mb': size_mb,
+            'status_code': 200,
+            'error': None,
+        }
+
     if not cache_dir or not media_id:
         return {
             'file_path': None,
